@@ -8,6 +8,7 @@ from .pretokenization_example import find_chunk_boundaries
 
 # Regex pattern for pretokenization (matches GPT-2 style tokenization)
 PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+PRETOKENIZATION_RE = re.compile(PRETOKENIZATION_PATTERN)
 
 def train_bpe(input_path: str | os.PathLike, vocab_size: int, special_tokens: list[str], **kwargs) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """Train a BPE tokenizer on the given corpus.
@@ -84,9 +85,8 @@ def _count_adjacent_pairs(word_counts: dict[tuple[int, ...], int]) -> dict[tuple
     """Count all adjacent token pairs in the word counts."""
     pair_counts = defaultdict(int)
     for word, count in word_counts.items():
-        for i in range(len(word) - 1):
-            pair = (word[i], word[i + 1])
-            pair_counts[pair] += count
+        for a, b in zip(word, word[1:]):
+            pair_counts[(a, b)] += count
     return dict(pair_counts)
 
 
@@ -158,8 +158,7 @@ def _preprocess_chunk(input_path: str | os.PathLike, start: int, end: int, speci
 
         for part in parts:
             # Apply pretokenization pattern
-            matches = re.finditer(PRETOKENIZATION_PATTERN, part)
-            for match in matches:
+            for match in PRETOKENIZATION_RE.finditer(part):
                 token_bytes = match.group().encode("utf-8")
                 # Convert bytes to tuple of individual byte values for consistency
                 word_tuple = tuple(token_bytes)
