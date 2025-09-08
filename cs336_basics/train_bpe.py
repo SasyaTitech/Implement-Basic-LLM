@@ -121,19 +121,21 @@ def _merge_pair_in_word(word: tuple[int, ...], pair_to_merge: tuple[int, int], n
     if len(word) < 2:
         return word
 
-    new_word = []
+    # Pre-unpack for efficiency and cache length
+    target_a, target_b = pair_to_merge
+    word_len = len(word)
+    result = []
     i = 0
-    while i < len(word):
-        if (i < len(word) - 1 and
-            word[i] == pair_to_merge[0] and
-            word[i + 1] == pair_to_merge[1]):
-            new_word.append(new_token_id)
+
+    while i < word_len:
+        if i < word_len - 1 and word[i] == target_a and word[i + 1] == target_b:
+            result.append(new_token_id)
             i += 2
         else:
-            new_word.append(word[i])
+            result.append(word[i])
             i += 1
 
-    return tuple(new_word)
+    return tuple(result)
 
 def _preprocess_chunk(input_path: str | os.PathLike, start: int, end: int, special_tokens: list[str]) -> dict[tuple[int, ...], int]:
     """Preprocess a chunk of the input data, returning word counts as tuples of byte values.
