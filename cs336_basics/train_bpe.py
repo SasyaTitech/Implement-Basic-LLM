@@ -7,8 +7,7 @@ from collections.abc import Iterable
 from .pretokenization_example import find_chunk_boundaries
 
 # Regex pattern for pretokenization (matches GPT-2 style tokenization)
-PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-PRETOKENIZATION_RE = re.compile(PRETOKENIZATION_PATTERN)
+PRETOKENIZATION_RE = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
 def train_bpe(input_path: str | os.PathLike, vocab_size: int, special_tokens: list[str], **kwargs) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """Train a BPE tokenizer on the given corpus.
