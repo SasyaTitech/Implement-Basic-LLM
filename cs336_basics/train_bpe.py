@@ -4,7 +4,7 @@ import regex as re
 from collections import defaultdict
 from collections.abc import Iterable
 
-from .pretokenization_example import find_chunk_boundaries
+from cs336_basics.pretokenization_example import find_chunk_boundaries
 
 # Regex pattern for pretokenization (matches GPT-2 style tokenization)
 PRETOKENIZATION_RE = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
@@ -98,15 +98,23 @@ def _get_pretokenized_word_counts(
             boundaries = [i * chunk_size for i in range(num_processes)]
             boundaries.append(file_size)
 
-    # Process chunks in parallel
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        chunk_results = pool.starmap(
-            _preprocess_chunk,
-            [
-                (input_path, start, end, special_tokens)
-                for start, end in zip(boundaries[:-1], boundaries[1:])
-            ],
-        )
+    # Create chunk jobs
+    chunk_jobs = [
+        (input_path, start, end, special_tokens)
+        for start, end in zip(boundaries[:-1], boundaries[1:])
+    ]
+
+    # If there's only one chunk (or none), avoid multiprocessing overhead
+    if len(chunk_jobs) <= 1:
+        chunk_results = [
+            _preprocess_chunk(input_path, start, end, special_tokens)
+            for (input_path, start, end, special_tokens) in chunk_jobs
+        ]
+    else:
+        # Cap processes to the actual number of chunks to avoid spawning idle workers
+        procs = min(num_processes, len(chunk_jobs))
+        with multiprocessing.Pool(processes=procs) as pool:
+            chunk_results = pool.starmap(_preprocess_chunk, chunk_jobs)
 
     # Merge results from all chunks
     return _merge_word_counts(chunk_results)
