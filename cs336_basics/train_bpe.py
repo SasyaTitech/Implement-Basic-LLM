@@ -31,7 +31,8 @@ def train_bpe(input_path: str | os.PathLike, vocab_size: int, special_tokens: li
     merges = []
 
     # Get pretokenized word counts from corpus
-    word_counts = _get_pretokenized_word_counts(input_path, special_tokens)
+    # Forward optional keyword arguments for flexibility (e.g. num_processes)
+    word_counts = _get_pretokenized_word_counts(input_path, special_tokens, **kwargs)
 
     # Perform BPE merges until we reach target vocabulary size
     while len(vocab) < vocab_size:
@@ -61,19 +62,50 @@ def _initialize_vocabulary(special_tokens: list[str]) -> dict[int, bytes]:
     return vocab
 
 
-def _get_pretokenized_word_counts(input_path: str | os.PathLike, special_tokens: list[str]) -> dict[tuple[int, ...], int]:
-    """Get word counts from pretokenized corpus using multiprocessing."""
-    num_processes = 4
-    split_special_token = b"<|endoftext|>"
+def _get_pretokenized_word_counts(
+    input_path: str | os.PathLike,
+    special_tokens: list[str],
+    *,
+    num_processes: int | None = None,
+    split_special_token: bytes | None = None,
+) -> dict[tuple[int, ...], int]:
+    """Get word counts from pretokenized corpus using multiprocessing.
+
+    Args:
+        input_path: Path to the corpus.
+        special_tokens: List of tokens that should not be split.
+        num_processes: Number of processes to use. Defaults to available CPUs.
+        split_special_token: Token used to find chunk boundaries. Defaults to the
+            first special token if provided.
+    """
+
+    if num_processes is None:
+        num_processes = multiprocessing.cpu_count()
+
+    if split_special_token is None:
+        split_special_token = (
+            special_tokens[0].encode("utf-8") if special_tokens else None
+        )
 
     with open(input_path, "rb") as f:
-        boundaries = find_chunk_boundaries(f, num_processes, split_special_token)
+        if split_special_token:
+            boundaries = find_chunk_boundaries(f, num_processes, split_special_token)
+        else:
+            # Fallback: evenly divide the file without respecting boundaries
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            chunk_size = max(1, file_size // num_processes)
+            boundaries = [i * chunk_size for i in range(num_processes)]
+            boundaries.append(file_size)
 
     # Process chunks in parallel
     with multiprocessing.Pool(processes=num_processes) as pool:
         chunk_results = pool.starmap(
             _preprocess_chunk,
-            [(input_path, start, end, special_tokens) for start, end in zip(boundaries[:-1], boundaries[1:])]
+            [
+                (input_path, start, end, special_tokens)
+                for start, end in zip(boundaries[:-1], boundaries[1:])
+            ],
         )
 
     # Merge results from all chunks
@@ -104,15 +136,19 @@ def _add_merged_token_to_vocab(vocab: dict[int, bytes], pair: tuple[int, int]) -
     return new_token_id
 
 
-def _apply_merge_to_words(word_counts: dict[tuple[int, ...], int], pair_to_merge: tuple[int, int], new_token_id: int) -> dict[tuple[int, ...], int]:
+def _apply_merge_to_words(
+    word_counts: dict[tuple[int, ...], int],
+    pair_to_merge: tuple[int, int],
+    new_token_id: int,
+) -> dict[tuple[int, ...], int]:
     """Apply a merge operation to all words, replacing the specified pair with the new token."""
-    new_word_counts = {}
+    new_word_counts = defaultdict(int)
 
     for word, count in word_counts.items():
         new_word = _merge_pair_in_word(word, pair_to_merge, new_token_id)
-        new_word_counts[new_word] = count
+        new_word_counts[new_word] += count
 
-    return new_word_counts
+    return dict(new_word_counts)
 
 
 def _merge_pair_in_word(word: tuple[int, ...], pair_to_merge: tuple[int, int], new_token_id: int) -> tuple[int, ...]:
@@ -153,8 +189,11 @@ def _preprocess_chunk(input_path: str | os.PathLike, start: int, end: int, speci
         chunk = f.read(end - start)
         chunk = chunk.decode("utf-8", errors="ignore")
 
-        # Split on special tokens to avoid tokenizing them
-        parts = re.split("|".join(map(re.escape, special_tokens)), chunk)
+        # Split on special tokens to avoid tokenizing them.
+        if special_tokens:
+            parts = re.split("|".join(map(re.escape, special_tokens)), chunk)
+        else:
+            parts = [chunk]
         word_counts = defaultdict(int)
 
         for part in parts:
