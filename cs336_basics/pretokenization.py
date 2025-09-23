@@ -1,16 +1,20 @@
+import multiprocessing
 import regex as re
 import os
-from typing import BinaryIO
-from rich.progress import track
+from typing import BinaryIO, Iterator
 from rich import print
+from rich.progress import track
 import pickle
+from region_timer import RegionTimer
 
 word_pattern = (
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 )
+word_pattern_compiled = re.compile(word_pattern)
 special_tokens = ["<|endoftext|>"]
 special_tokens = list(map(lambda x: re.escape(x), special_tokens))
 split_pattern = "|".join(special_tokens)
+split_pattern_compiled = re.compile(split_pattern)
 
 
 def find_chunk_boundaries(
@@ -62,47 +66,70 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def process_doc(doc: str, pre_tokens_dict: dict[bytes, int]) -> int:
-    count = 0
-    for m in re.finditer(word_pattern, doc):
+def process_doc(doc: str, pre_tokens_dict: dict[bytes, int]) -> None:
+    for m in word_pattern_compiled.finditer(doc):
         word = m.group()
         key = word.encode("utf-8")
-        count += 1
         pre_tokens_dict[key] = pre_tokens_dict.get(key, 0) + 1
-    return count
 
 
-def process_chunk(chunk: str, pre_tokens_dict: dict[bytes, int]) -> int:
-    count = 0
-    documents = re.split(split_pattern, chunk)
-    print(f"Processing {len(documents)} documents in chunk")
-    for doc in track(documents):
-        count += process_doc(doc, pre_tokens_dict)
-    return count
+def process_chunk(idx: int, file_path: str, start: int, end: int) -> dict[bytes, int]:
+    with open(file_path, "rb") as f:
+        f.seek(start)
+        chunk: str = f.read(end - start).decode("utf-8")
+        pre_tokens_dict: dict[bytes, int] = {}
+        if idx == 0:
+            print(f"Processing chunk from {start} to {end}, size {len(chunk)} bytes")
+            total_count = sum([1 for _ in split_pattern_compiled.splititer(chunk)])
+            print(f"Total documents in chunk {idx}: {total_count}")
+            iterator: Iterator[str] = split_pattern_compiled.splititer(chunk)
+            for _ in track(range(total_count), description="Processing documents..."):
+                process_doc(next(iterator), pre_tokens_dict)
+        else:
+            total_count = 0
+            for doc in split_pattern_compiled.splititer(chunk):
+                process_doc(doc, pre_tokens_dict)
+                total_count += 1
+            print(f"Total documents in chunk {idx}: {total_count}")
+    return pre_tokens_dict
 
 
 def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
     pre_tokens_dict = dict[bytes, int]()
+    region_timer = RegionTimer()
+    num_processes: int = 4
     with open(file_path, "rb") as f:
-        num_processes = 4
+        region_timer.start("find boundaries")
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+        region_timer.stop("find boundaries")
 
         # The following is a serial implementation, but you can parallelize this
         # by sending each start/end pair to a set of processes.
         print(f"Found {len(boundaries)-1} chunks")
-        for start, end in zip(boundaries[:-1], boundaries[1:]):
-            f.seek(start)
-            chunk = f.read(end - start).decode("utf-8", errors="ignore")
-            print(f"Processing bytes {start} to {end}, chunk size {len(chunk)}")
-            process_chunk(chunk, pre_tokens_dict)
-            print(f"Total unique pre-tokens so far: {len(pre_tokens_dict)}")
+
+    # use multiprocessing to process each chunk in parallel
+    pre_tokens_dict: dict[bytes, int] = {}
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        region_timer.start("process chunks")
+        all_dicts = pool.starmap(process_chunk, [(t, file_path, start, end) for t, (start, end) in
+                                                 enumerate(zip(boundaries[:-1], boundaries[1:]))])
+        region_timer.stop("process chunks")
+
+        region_timer.start("merge results")
+        for idx, d in enumerate(all_dicts):
+            print(f"Merging {len(d)} unique pre-tokens from chunk {idx}")
+            for k, v in d.items():
+                pre_tokens_dict[k] = pre_tokens_dict.get(k, 0) + v
+        region_timer.stop("merge results")
+        print(f"Total unique pre-tokens so far: {len(pre_tokens_dict)}")
+    region_timer.report()
 
     print(f"Total unique pre-tokens: {len(pre_tokens_dict)}")
     return pre_tokens_dict
 
 
 if __name__ == "__main__":
-    pre_tokens_dict = get_pre_token_counts("../data/TinyStoriesV2-GPT4-valid.txt")
+    pre_tokens_dict = get_pre_token_counts("../data/TinyStoriesV2-GPT4-train.txt")
     with open("../data/pretokenization_output.dat", "wb") as out_f:
         # Save the pre-token counts to a file, use simple binary serialization
         pickle.dump(pre_tokens_dict, out_f)

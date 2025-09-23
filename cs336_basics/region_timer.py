@@ -1,5 +1,6 @@
 import time
 from collections import defaultdict
+from typing import Self
 from rich.console import Console
 from rich.table import Table
 
@@ -17,6 +18,11 @@ class RegionTimer:
         dt = time.perf_counter() - self.t0.pop(name)
         self.total[name] += dt
         self.count[name] += 1
+
+    def merge(self, other: Self):
+        for name, t in other.total.items():
+            self.total[name] += t
+            self.count[name] += other.count[name]
 
     def report(self, log=print):
         # If using default print, use rich table for better formatting

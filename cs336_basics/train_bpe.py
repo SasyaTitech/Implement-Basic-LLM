@@ -3,6 +3,7 @@ import pickle
 from rich import print
 from rich.progress import track
 from region_timer import RegionTimer
+from pretokenization import get_pre_token_counts
 
 
 @dataclass(frozen=True)
@@ -109,11 +110,12 @@ def update_pair_counts_opt(
             token_pair_counter.add_pair(pair, idx, tokens_count)
 
 
-def do_merge_iter(vocab_size: int, fast: bool = True) -> BPETokenizerParams:
-    timer = RegionTimer()
-    pre_tokens_dict = dict[bytes, int]()
-    with open("../data/pretokenization_output.dat", "rb") as in_f:
-        pre_tokens_dict = pickle.load(in_f)
+def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer, fast: bool = True) -> BPETokenizerParams:
+    timer.start("initialize")
+    if not pre_tokens_dict:
+        pre_tokens_dict = dict[bytes, int]()
+        with open("../data/pretokenization_output.dat", "rb") as in_f:
+            pre_tokens_dict = pickle.load(in_f)
     pre_tokens = PreTokens(pre_tokens_dict)
 
     pre_tokens_count = len(pre_tokens)
@@ -122,26 +124,36 @@ def do_merge_iter(vocab_size: int, fast: bool = True) -> BPETokenizerParams:
     bpe_params = BPETokenizerParams(vocab=dict(), merges=dict())
     for i in range(256):
         bpe_params.vocab[i] = bytes([i])
+    
+    assert len(bpe_params.vocab) == 256
 
     token_pair_counter: TokenPairCounter = TokenPairCounter()
     token_pair_counter.init_from(pre_tokens)
+    timer.stop("initialize")
+
     for iter in track(range(vocab_size)):
-        if bpe_params.vocab and len(bpe_params.vocab) >= vocab_size:
-            break
         timer.start("find max")
         item: tuple[bytes, int] = token_pair_counter.get_max_pair()
+        if item[1] == 0:
+            print("No more pairs to merge.")
+            break
         timer.stop("find max")
 
+        timer.start("add new token")
         new_token: bytes = item[0]
         new_token_count: int = item[1]
+
         new_token_idx: int = len(bpe_params.vocab)
-        bpe_params.vocab[new_token_count] = new_token
+        bpe_params.vocab[new_token_idx] = new_token
         bpe_params.merges[(new_token[0:1], new_token[1:2])] = new_token_idx
+        if bpe_params.vocab and len(bpe_params.vocab) >= vocab_size:
+            break
 
         if iter < 5 or iter % 500 == 99:
             print(
                 f"New token: {new_token} with count {new_token_count}.\tnew_token_idx={new_token_idx}"
             )
+        timer.stop("add new token")
 
         # update current_tokens_dict and token_pair_counts
         timer.start("update tokens")
@@ -186,20 +198,28 @@ def do_merge_iter(vocab_size: int, fast: bool = True) -> BPETokenizerParams:
             token_pair_counter.init_from(pre_tokens)
             assert token_pair_counter.get_token_count(new_token) == 0
             timer.stop("rebuild pairs")
-    timer.report()
+    
+    assert len(bpe_params.vocab) <= vocab_size
     return bpe_params
 
 
 def train_bpe(
     input_path: str, vocab_size: int, special_tokens: list[str]
 ) -> BPETokenizerParams:
-    bpe_params: BPETokenizerParams = do_merge_iter(
-        vocab_size - len(special_tokens), fast=True
+    timer = RegionTimer()
+    timer.start("get pre-token counts")
+    pre_tokens_dict: dict[bytes, int] = get_pre_token_counts(input_path)
+    timer.stop("get pre-token counts")
+
+    bpe_params: BPETokenizerParams = train(
+        vocab_size - len(special_tokens), pre_tokens_dict, timer, fast=True
     )
     # Add special tokens at the end of the vocab
     for token in special_tokens:
         token = token.encode("utf-8")
         bpe_params.vocab[len(bpe_params.vocab)] = token
+    print(f"Final vocab size: {len(bpe_params.vocab)}")
+    timer.report()
     return bpe_params
 
 
@@ -215,7 +235,7 @@ if __name__ == "__main__":
         help="Mode to run the BPE training",
     )
     args = parser.parse_args()
-    train_bpe("", 10000, ["<|endoftext|>"])
+    train_bpe("../data/TinyStoriesV2-GPT4-train.txt", 10000, ["<|endoftext|>"])
     # vocab_size = 10000
     # special_tokens = ["<|endoftext|>"]
     # vocab, merges = train_bpe("../data/TinyStoriesV2-GPT4-train.txt", vocab_size, special_tokens)
