@@ -112,8 +112,13 @@ def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
     pre_tokens_dict: dict[bytes, int] = {}
     with multiprocessing.Pool(processes=num_processes) as pool:
         region_timer.start("process chunks")
-        all_dicts = pool.starmap(process_chunk, [(t, file_path, start, end) for t, (start, end) in
-                                                 enumerate(zip(boundaries[:-1], boundaries[1:]))])
+        all_dicts = pool.starmap(
+            process_chunk,
+            [
+                (t, file_path, start, end)
+                for t, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]))
+            ],
+        )
         region_timer.stop("process chunks")
 
         region_timer.start("merge results")

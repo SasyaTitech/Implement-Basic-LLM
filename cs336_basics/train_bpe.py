@@ -123,7 +123,12 @@ def update_pair_counts_opt(
             token_pair_counter.add_pair(pair, idx, tokens_count)
 
 
-def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer, fast: bool = True) -> BPETokenizerParams:
+def train(
+    vocab_size: int,
+    pre_tokens_dict: dict[bytes, int],
+    timer: RegionTimer,
+    fast: bool = True,
+) -> BPETokenizerParams:
     timer.start("initialize")
     if not pre_tokens_dict:
         pre_tokens_dict = dict[bytes, int]()
@@ -137,7 +142,7 @@ def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer
     bpe_params = BPETokenizerParams(vocab=dict(), merges=dict(), merges_list=[])
     for i in range(256):
         bpe_params.vocab[i] = bytes([i])
-    
+
     assert len(bpe_params.vocab) == 256
 
     token_pair_counter: TokenPairCounter = TokenPairCounter()
@@ -159,10 +164,11 @@ def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer
 
         new_token_idx: int = len(bpe_params.vocab)
         bpe_params.vocab[new_token_idx] = new_token
-        
+
         # add message with this assertion failure
-        assert merged_tokens not in bpe_params.merges, \
-            f"Merge {merged_tokens} already exists in merges. merge_tokens={merged_tokens} new_token={new_token}"
+        assert (
+            merged_tokens not in bpe_params.merges
+        ), f"Merge {merged_tokens} already exists in merges. merge_tokens={merged_tokens} new_token={new_token}"
         bpe_params.merges[merged_tokens] = new_token_idx
         bpe_params.merges_list.append(merged_tokens)
         if bpe_params.vocab and len(bpe_params.vocab) >= vocab_size:
@@ -183,14 +189,19 @@ def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer
             new_pre_tokens: list[bytes] = []
             i = 0
             while i < len(old_pre_tokens):
-                if i < len(old_pre_tokens) - 1 and (old_pre_tokens[i], old_pre_tokens[i + 1]) == merged_tokens:
+                if (
+                    i < len(old_pre_tokens) - 1
+                    and (old_pre_tokens[i], old_pre_tokens[i + 1]) == merged_tokens
+                ):
                     new_pre_tokens.append(new_token)
                     i += 2
                 else:
                     new_pre_tokens.append(old_pre_tokens[i])
                     i += 1
 
-            assert len(new_pre_tokens) != len(old_pre_tokens), f"Token {new_token} not found in pre_tokens"
+            assert len(new_pre_tokens) != len(
+                old_pre_tokens
+            ), f"Token {new_token} not found in pre_tokens"
 
             new_pre_tokens_list.append(tuple(new_pre_tokens))
             affected_docs_list.append(idx)
@@ -201,7 +212,7 @@ def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer
             update_pair_counts_opt(
                 new_pre_tokens_list, affected_docs_list, pre_tokens, token_pair_counter
             )
-            assert token_pair_counter.get_token_count(new_token) == 0
+            assert token_pair_counter.get_token_count(merged_tokens) == 0
             timer.stop("update pairs")
 
         timer.start("update pre_tokens")
@@ -213,9 +224,11 @@ def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer
             timer.start("rebuild pairs")
             token_pair_counter.init_from(pre_tokens)
             count: int = token_pair_counter.get_token_count(merged_tokens)
-            assert count == 0, f"After rebuilding, {merged_tokens} has count {count}, expected 0"
+            assert (
+                count == 0
+            ), f"After rebuilding, {merged_tokens} has count {count}, expected 0"
             timer.stop("rebuild pairs")
-    
+
     assert len(bpe_params.vocab) <= vocab_size
     return bpe_params
 
