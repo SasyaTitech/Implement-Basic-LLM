@@ -2,8 +2,10 @@ from dataclasses import dataclass
 import pickle
 from rich import print
 from rich.progress import track
-from region_timer import RegionTimer
-from pretokenization import get_pre_token_counts
+from cs336_basics.region_timer import RegionTimer
+from cs336_basics.pretokenization import get_pre_token_counts
+
+is_main_file: bool = __name__ == "__main__"
 
 
 @dataclass(frozen=True)
@@ -12,6 +14,7 @@ class BPETokenizerParams:
 
     vocab: dict[int, bytes]  # index -> bytes
     merges: dict[tuple[bytes, bytes], int]  # (bytes1, bytes2) -> new_index
+    merges_list: list[tuple[bytes, bytes]]  # (bytes1, bytes2) in order of creation
 
 
 class PreTokens:
@@ -40,8 +43,8 @@ class PreTokens:
 
 
 class TokenPairCounter:
-    pair_counts: dict[bytes, int]
-    pair_to_pretokens: dict[bytes, set[int]]
+    pair_counts: dict[tuple[bytes, bytes], int]
+    pair_to_pretokens: dict[tuple[bytes, bytes], set[int]]
 
     def __init__(self) -> None:
         self.pair_counts = {}
@@ -53,18 +56,18 @@ class TokenPairCounter:
         for idx, tokens in enumerate(pre_tokens.all_docs):
             tokens_count = pre_tokens.get_item_count(idx)
             for i in range(len(tokens) - 1):
-                pair: bytes = tokens[i] + tokens[i + 1]
+                pair: tuple[bytes, bytes] = (tokens[i], tokens[i + 1])
                 self.add_pair(pair, idx, tokens_count)
 
-    def add_pair(self, pair: bytes, doc_idx: int, count: int) -> None:
+    def add_pair(self, pair: tuple[bytes, bytes], doc_idx: int, count: int) -> None:
         if pair not in self.pair_counts:
             self.pair_counts[pair] = 0
             self.pair_to_pretokens[pair] = set()
         self.pair_counts[pair] += count
         self.pair_to_pretokens[pair].add(doc_idx)
 
-    def remove_pair(self, pair: bytes, doc_idx: int, count: int) -> None:
-        assert pair in self.pair_counts
+    def remove_pair(self, pair: tuple[bytes, bytes], doc_idx: int, count: int) -> None:
+        assert pair in self.pair_counts, f"Trying to remove non-existing pair {pair}"
 
         self.pair_counts[pair] -= count
         if self.pair_counts[pair] <= 0:
@@ -73,15 +76,15 @@ class TokenPairCounter:
         else:
             self.pair_to_pretokens[pair].discard(doc_idx)
 
-    def get_max_pair(self) -> tuple[bytes, int]:
+    def get_max_pair(self) -> tuple[tuple[bytes, bytes], int]:
         if not self.pair_counts:
-            return (b"", 0)
+            return ((b"", b""), 0)
         return max(self.pair_counts.items(), key=lambda x: (x[1], x[0]))
 
-    def get_pretokens(self, pair: bytes) -> set[int]:
+    def get_pretokens(self, pair: tuple[bytes, bytes]) -> set[int]:
         return self.pair_to_pretokens.get(pair, set())
 
-    def get_token_count(self, pair: bytes) -> int:
+    def get_token_count(self, pair: tuple[bytes, bytes]) -> int:
         return self.pair_counts.get(pair, 0)
 
     def clear(self):
@@ -101,12 +104,12 @@ def update_pair_counts_opt(
 
         # remove old pairs
         for i in range(len(tokens) - 1):
-            pair: bytes = tokens[i] + tokens[i + 1]
+            pair: tuple[bytes, bytes] = (tokens[i], tokens[i + 1])
             token_pair_counter.remove_pair(pair, idx, tokens_count)
 
         # add new pairs
         for i in range(len(new_tokens) - 1):
-            pair: bytes = new_tokens[i] + new_tokens[i + 1]
+            pair: tuple[bytes, bytes] = (new_tokens[i], new_tokens[i + 1])
             token_pair_counter.add_pair(pair, idx, tokens_count)
 
 
@@ -121,7 +124,7 @@ def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer
     pre_tokens_count = len(pre_tokens)
     print(f"Loaded {pre_tokens_count} unique pre-tokens")
 
-    bpe_params = BPETokenizerParams(vocab=dict(), merges=dict())
+    bpe_params = BPETokenizerParams(vocab=dict(), merges=dict(), merges_list=[])
     for i in range(256):
         bpe_params.vocab[i] = bytes([i])
     
@@ -133,19 +136,25 @@ def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer
 
     for iter in track(range(vocab_size)):
         timer.start("find max")
-        item: tuple[bytes, int] = token_pair_counter.get_max_pair()
+        item: tuple[tuple[bytes, bytes], int] = token_pair_counter.get_max_pair()
         if item[1] == 0:
             print("No more pairs to merge.")
             break
         timer.stop("find max")
 
         timer.start("add new token")
-        new_token: bytes = item[0]
+        merged_tokens: tuple[bytes, bytes] = item[0]
+        new_token = merged_tokens[0] + merged_tokens[1]
         new_token_count: int = item[1]
 
         new_token_idx: int = len(bpe_params.vocab)
         bpe_params.vocab[new_token_idx] = new_token
-        bpe_params.merges[(new_token[0:1], new_token[1:2])] = new_token_idx
+        
+        # add message with this assertion failure
+        assert merged_tokens not in bpe_params.merges, \
+            f"Merge {merged_tokens} already exists in merges. merge_tokens={merged_tokens} new_token={new_token}"
+        bpe_params.merges[merged_tokens] = new_token_idx
+        bpe_params.merges_list.append(merged_tokens)
         if bpe_params.vocab and len(bpe_params.vocab) >= vocab_size:
             break
 
@@ -157,46 +166,44 @@ def train(vocab_size: int, pre_tokens_dict: dict[bytes, int], timer: RegionTimer
 
         # update current_tokens_dict and token_pair_counts
         timer.start("update tokens")
-        new_tokens_list: list[tuple[bytes, ...]] = []
+        new_pre_tokens_list: list[tuple[bytes, ...]] = []
         affected_docs_list: list[int] = []
-        for idx in token_pair_counter.get_pretokens(new_token):
-            tokens = pre_tokens[idx]
-            new_tokens = list[bytes]()
+        for idx in token_pair_counter.get_pretokens(merged_tokens):
+            old_pre_tokens: tuple[bytes, ...] = pre_tokens[idx]
+            new_pre_tokens: list[bytes] = []
             i = 0
-            while i < len(tokens):
-                if i < len(tokens) - 1 and tokens[i] + tokens[i + 1] == new_token:
-                    new_tokens.append(new_token)
+            while i < len(old_pre_tokens):
+                if i < len(old_pre_tokens) - 1 and (old_pre_tokens[i], old_pre_tokens[i + 1]) == merged_tokens:
+                    new_pre_tokens.append(new_token)
                     i += 2
                 else:
-                    new_tokens.append(tokens[i])
+                    new_pre_tokens.append(old_pre_tokens[i])
                     i += 1
 
-            if len(new_tokens) == len(tokens):
-                continue
+            assert len(new_pre_tokens) != len(old_pre_tokens), f"Token {new_token} not found in pre_tokens"
 
-            new_tokens = tuple(new_tokens)
-            new_tokens_list.append(new_tokens)
+            new_pre_tokens_list.append(tuple(new_pre_tokens))
             affected_docs_list.append(idx)
         timer.stop("update tokens")
 
         if fast:
             timer.start("update pairs")
-            # token_pair_counter.init_from(pre_tokens)
             update_pair_counts_opt(
-                new_tokens_list, affected_docs_list, pre_tokens, token_pair_counter
+                new_pre_tokens_list, affected_docs_list, pre_tokens, token_pair_counter
             )
             assert token_pair_counter.get_token_count(new_token) == 0
             timer.stop("update pairs")
 
         timer.start("update pre_tokens")
-        for idx, new_tokens in zip(affected_docs_list, new_tokens_list):
-            pre_tokens[idx] = new_tokens
+        for idx, new_tokens_tuple in zip(affected_docs_list, new_pre_tokens_list):
+            pre_tokens[idx] = new_tokens_tuple
         timer.stop("update pre_tokens")
 
         if not fast:
             timer.start("rebuild pairs")
             token_pair_counter.init_from(pre_tokens)
-            assert token_pair_counter.get_token_count(new_token) == 0
+            count: int = token_pair_counter.get_token_count(merged_tokens)
+            assert count == 0, f"After rebuilding, {merged_tokens} has count {count}, expected 0"
             timer.stop("rebuild pairs")
     
     assert len(bpe_params.vocab) <= vocab_size
@@ -219,7 +226,8 @@ def train_bpe(
         token = token.encode("utf-8")
         bpe_params.vocab[len(bpe_params.vocab)] = token
     print(f"Final vocab size: {len(bpe_params.vocab)}")
-    timer.report()
+    if is_main_file:
+        timer.report()
     return bpe_params
 
 
@@ -235,7 +243,7 @@ if __name__ == "__main__":
         help="Mode to run the BPE training",
     )
     args = parser.parse_args()
-    train_bpe("../data/TinyStoriesV2-GPT4-train.txt", 10000, ["<|endoftext|>"])
+    train_bpe("data/TinyStoriesV2-GPT4-train.txt", 500, ["<|endoftext|>"])
     # vocab_size = 10000
     # special_tokens = ["<|endoftext|>"]
     # vocab, merges = train_bpe("../data/TinyStoriesV2-GPT4-train.txt", vocab_size, special_tokens)

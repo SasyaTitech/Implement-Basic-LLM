@@ -5,8 +5,9 @@ from typing import BinaryIO, Iterator
 from rich import print
 from rich.progress import track
 import pickle
-from region_timer import RegionTimer
+from cs336_basics.region_timer import RegionTimer
 
+is_main_file: bool = __name__ == "__main__"
 word_pattern = (
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 )
@@ -122,7 +123,8 @@ def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
                 pre_tokens_dict[k] = pre_tokens_dict.get(k, 0) + v
         region_timer.stop("merge results")
         print(f"Total unique pre-tokens so far: {len(pre_tokens_dict)}")
-    region_timer.report()
+    if is_main_file:
+        region_timer.report()
 
     print(f"Total unique pre-tokens: {len(pre_tokens_dict)}")
     return pre_tokens_dict
