@@ -5,11 +5,12 @@ from rich.progress import track
 from rich import print
 import pickle
 
-word_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+word_pattern = (
+    r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+)
 special_tokens = ["<|endoftext|>"]
 special_tokens = list(map(lambda x: re.escape(x), special_tokens))
 split_pattern = "|".join(special_tokens)
-word_count_dict = dict[bytes, int]()
 
 
 def find_chunk_boundaries(
@@ -21,7 +22,9 @@ def find_chunk_boundaries(
     Chunk the file into parts that can be counted independently.
     May return fewer chunks if the boundaries end up overlapping.
     """
-    assert isinstance(split_special_token, bytes), "Must represent special token as a bytestring"
+    assert isinstance(
+        split_special_token, bytes
+    ), "Must represent special token as a bytestring"
 
     # Get total file size in bytes
     file.seek(0, os.SEEK_END)
@@ -59,27 +62,28 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def process_doc(doc: str) -> int:
+def process_doc(doc: str, pre_tokens_dict: dict[bytes, int]) -> int:
     count = 0
     for m in re.finditer(word_pattern, doc):
         word = m.group()
         key = word.encode("utf-8")
         count += 1
-        word_count_dict[key] = word_count_dict.get(key, 0) + 1
+        pre_tokens_dict[key] = pre_tokens_dict.get(key, 0) + 1
     return count
 
 
-def process_chunk(chunk: str) -> int:
+def process_chunk(chunk: str, pre_tokens_dict: dict[bytes, int]) -> int:
     count = 0
     documents = re.split(split_pattern, chunk)
     print(f"Processing {len(documents)} documents in chunk")
     for doc in track(documents):
-        count += process_doc(doc)
+        count += process_doc(doc, pre_tokens_dict)
     return count
 
 
-if __name__ == "__main__":
-    with open("../data/TinyStoriesV2-GPT4-train.txt", "rb") as f:
+def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
+    pre_tokens_dict = dict[bytes, int]()
+    with open(file_path, "rb") as f:
         num_processes = 4
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
@@ -90,11 +94,15 @@ if __name__ == "__main__":
             f.seek(start)
             chunk = f.read(end - start).decode("utf-8", errors="ignore")
             print(f"Processing bytes {start} to {end}, chunk size {len(chunk)}")
-            process_chunk(chunk)
-            print(f"Total unique pre-tokens so far: {len(word_count_dict)}")
-    
+            process_chunk(chunk, pre_tokens_dict)
+            print(f"Total unique pre-tokens so far: {len(pre_tokens_dict)}")
+
+    print(f"Total unique pre-tokens: {len(pre_tokens_dict)}")
+    return pre_tokens_dict
+
+
+if __name__ == "__main__":
+    pre_tokens_dict = get_pre_token_counts("../data/TinyStoriesV2-GPT4-valid.txt")
     with open("../data/pretokenization_output.dat", "wb") as out_f:
         # Save the pre-token counts to a file, use simple binary serialization
-        pickle.dump(word_count_dict, out_f)
-
-    print(f"Total unique pre-tokens: {len(word_count_dict)}")
+        pickle.dump(pre_tokens_dict, out_f)
