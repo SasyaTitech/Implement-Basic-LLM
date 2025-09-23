@@ -87,7 +87,7 @@ class TokenPairCounter:
             if count > max_count:
                 max_count = count
                 max_key = key
-            elif count == max_count and key < max_key:
+            elif count == max_count and key > max_key:
                 max_key = key
         return (max_key, max_count)
 
@@ -151,16 +151,15 @@ def train(
 
     for iter in track(range(vocab_size)):
         timer.start("find max")
-        item: tuple[tuple[bytes, bytes], int] = token_pair_counter.get_max_pair()
-        if item[1] == 0:
+        (merged_tokens, merged_count) = token_pair_counter.get_max_pair()
+        if merged_count == 0:
             print("No more pairs to merge.")
             break
         timer.stop("find max")
 
         timer.start("add new token")
-        merged_tokens: tuple[bytes, bytes] = item[0]
         new_token = merged_tokens[0] + merged_tokens[1]
-        new_token_count: int = item[1]
+        new_token_count: int = merged_count
 
         new_token_idx: int = len(bpe_params.vocab)
         bpe_params.vocab[new_token_idx] = new_token
