@@ -79,7 +79,17 @@ class TokenPairCounter:
     def get_max_pair(self) -> tuple[tuple[bytes, bytes], int]:
         if not self.pair_counts:
             return ((b"", b""), 0)
-        return max(self.pair_counts.items(), key=lambda x: (x[1], x[0]))
+        # return the lexicographically smallest pair in case of ties
+        max_count = 0
+        max_key = (b"", b"")
+        for key in self.pair_counts:
+            count = self.pair_counts[key]
+            if count > max_count:
+                max_count = count
+                max_key = key
+            elif count == max_count and key < max_key:
+                max_key = key
+        return (max_key, max_count)
 
     def get_pretokens(self, pair: tuple[bytes, bytes]) -> set[int]:
         return self.pair_to_pretokens.get(pair, set())
@@ -226,6 +236,11 @@ def train_bpe(
         token = token.encode("utf-8")
         bpe_params.vocab[len(bpe_params.vocab)] = token
     print(f"Final vocab size: {len(bpe_params.vocab)}")
+    # find longest token
+    timer.start("find longest token")
+    longest_token = max(bpe_params.vocab.values(), key=len)
+    print(f"Longest token: {longest_token} with length {len(longest_token)}")
+    timer.stop("find longest token")
     if is_main_file:
         timer.report()
     return bpe_params
@@ -233,18 +248,19 @@ def train_bpe(
 
 if __name__ == "__main__":
     import argparse
+    import time
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mode",
+        "--file",
         type=str,
-        default="fast",
-        choices=["native", "fast"],
-        help="Mode to run the BPE training",
+        default="data/TinyStoriesV2-GPT4-train.txt",
+        help="Path to the input text file.",
     )
     args = parser.parse_args()
-    train_bpe("data/TinyStoriesV2-GPT4-train.txt", 500, ["<|endoftext|>"])
-    # vocab_size = 10000
-    # special_tokens = ["<|endoftext|>"]
-    # vocab, merges = train_bpe("../data/TinyStoriesV2-GPT4-train.txt", vocab_size, special_tokens)
-    # print(f"Trained BPE with vocab size {len(vocab)} and {len(merges)} merges")
+
+    now = time.time()
+    vocab_size = 10000 if "TinyStories" in args.file else 32000
+
+    train_bpe(args.file, vocab_size, ["<|endoftext|>"])
+    print(f"Time taken: {time.time() - now} seconds")
