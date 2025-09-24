@@ -79,12 +79,12 @@ def process_chunk(idx: int, file_path: str, start: int, end: int) -> dict[bytes,
         f.seek(start)
         chunk: str = f.read(end - start).decode("utf-8")
         pre_tokens_dict: dict[bytes, int] = {}
-        if idx == 0:
+        if idx % 4 == 0:
             print(f"Processing chunk from {start} to {end}, size {len(chunk)} bytes")
             total_count = sum([1 for _ in split_pattern_compiled.splititer(chunk)])
             print(f"Total documents in chunk {idx}: {total_count}")
             iterator: Iterator[str] = split_pattern_compiled.splititer(chunk)
-            for _ in track(range(total_count), description="Processing documents..."):
+            for _ in track(range(total_count), description=f"Processing chunk {idx}..."):
                 process_doc(next(iterator), pre_tokens_dict)
         else:
             total_count = 0
@@ -100,6 +100,13 @@ def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
     region_timer = RegionTimer()
     num_processes: int = 4
     with open(file_path, "rb") as f:
+        # get file size
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell() / 1024 / 1024  # in MB
+        f.seek(0)
+        print(f"File size: {file_size} MB")
+        num_processes = max(num_processes, int(file_size // 400) + 1)
+        print(f"Using {num_processes} processes")
         region_timer.start("find boundaries")
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
         region_timer.stop("find boundaries")
@@ -110,7 +117,7 @@ def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
 
     # use multiprocessing to process each chunk in parallel
     pre_tokens_dict: dict[bytes, int] = {}
-    with multiprocessing.Pool(processes=num_processes) as pool:
+    with multiprocessing.Pool(processes=4) as pool:
         region_timer.start("process chunks")
         all_dicts = pool.starmap(
             process_chunk,
@@ -136,7 +143,24 @@ def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
 
 
 if __name__ == "__main__":
-    pre_tokens_dict = get_pre_token_counts("../data/TinyStoriesV2-GPT4-train.txt")
-    with open("../data/pretokenization_output.dat", "wb") as out_f:
+    import argparse
+    import time
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--file",
+        type=str,
+        default="data/TinyStoriesV2-GPT4-train.txt",
+        help="Path to the input text file.",
+    )
+    args = parser.parse_args()
+
+    now = time.time()
+    pre_tokens_dict = get_pre_token_counts(args.file)
+    print(f"Time taken: {int(time.time() - now)} seconds")
+
+    # get file directory of the input file
+    file_dir = os.path.dirname(args.file)
+    with open(os.path.join(file_dir, "pretokenization_output.dat"), "wb") as out_f:
         # Save the pre-token counts to a file, use simple binary serialization
         pickle.dump(pre_tokens_dict, out_f)

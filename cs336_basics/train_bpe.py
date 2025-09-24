@@ -4,6 +4,7 @@ from rich import print
 from rich.progress import track
 from cs336_basics.region_timer import RegionTimer
 from cs336_basics.pretokenization import get_pre_token_counts
+from cs336_basics.token_pair_counter import TokenPairCounter, PreTokens, Pair
 
 is_main_file: bool = __name__ == "__main__"
 
@@ -13,93 +14,8 @@ class BPETokenizerParams:
     """All you need to specify a BPETokenizer."""
 
     vocab: dict[int, bytes]  # index -> bytes
-    merges: dict[tuple[bytes, bytes], int]  # (bytes1, bytes2) -> new_index
-    merges_list: list[tuple[bytes, bytes]]  # (bytes1, bytes2) in order of creation
-
-
-class PreTokens:
-    all_docs: list[tuple[bytes, ...]]
-    docs_count: list[int]
-
-    def __init__(self, pre_tokens_dict: dict[bytes, int]) -> None:
-        self.all_docs: list[tuple[bytes, ...]] = []
-        self.docs_count: list[int] = []
-        for word, tokens_count in pre_tokens_dict.items():
-            tokens = tuple(word[i : i + 1] for i in range(len(word)))
-            self.all_docs.append(tokens)
-            self.docs_count.append(tokens_count)
-
-    def __len__(self) -> int:
-        return len(self.all_docs)
-
-    def __getitem__(self, idx: int) -> tuple[bytes, ...]:
-        return self.all_docs[idx]
-
-    def __setitem__(self, idx: int, value: tuple[bytes, ...]) -> None:
-        self.all_docs[idx] = value
-
-    def get_item_count(self, idx: int) -> int:
-        return self.docs_count[idx]
-
-
-class TokenPairCounter:
-    pair_counts: dict[tuple[bytes, bytes], int]
-    pair_to_pretokens: dict[tuple[bytes, bytes], set[int]]
-
-    def __init__(self) -> None:
-        self.pair_counts = {}
-        self.pair_to_pretokens = {}
-
-    def init_from(self, pre_tokens: PreTokens):
-        self.pair_counts.clear()
-        self.pair_to_pretokens.clear()
-        for idx, tokens in enumerate(pre_tokens.all_docs):
-            tokens_count = pre_tokens.get_item_count(idx)
-            for i in range(len(tokens) - 1):
-                pair: tuple[bytes, bytes] = (tokens[i], tokens[i + 1])
-                self.add_pair(pair, idx, tokens_count)
-
-    def add_pair(self, pair: tuple[bytes, bytes], doc_idx: int, count: int) -> None:
-        if pair not in self.pair_counts:
-            self.pair_counts[pair] = 0
-            self.pair_to_pretokens[pair] = set()
-        self.pair_counts[pair] += count
-        self.pair_to_pretokens[pair].add(doc_idx)
-
-    def remove_pair(self, pair: tuple[bytes, bytes], doc_idx: int, count: int) -> None:
-        assert pair in self.pair_counts, f"Trying to remove non-existing pair {pair}"
-
-        self.pair_counts[pair] -= count
-        if self.pair_counts[pair] <= 0:
-            del self.pair_counts[pair]
-            del self.pair_to_pretokens[pair]
-        else:
-            self.pair_to_pretokens[pair].discard(doc_idx)
-
-    def get_max_pair(self) -> tuple[tuple[bytes, bytes], int]:
-        if not self.pair_counts:
-            return ((b"", b""), 0)
-        # return the lexicographically smallest pair in case of ties
-        max_count = 0
-        max_key = (b"", b"")
-        for key in self.pair_counts:
-            count = self.pair_counts[key]
-            if count > max_count:
-                max_count = count
-                max_key = key
-            elif count == max_count and key > max_key:
-                max_key = key
-        return (max_key, max_count)
-
-    def get_pretokens(self, pair: tuple[bytes, bytes]) -> set[int]:
-        return self.pair_to_pretokens.get(pair, set())
-
-    def get_token_count(self, pair: tuple[bytes, bytes]) -> int:
-        return self.pair_counts.get(pair, 0)
-
-    def clear(self):
-        self.pair_counts.clear()
-        self.pair_to_pretokens.clear()
+    merges: dict[Pair, int]  # (bytes1, bytes2) -> new_index
+    merges_list: list[Pair]  # (bytes1, bytes2) in order of creation
 
 
 def update_pair_counts_opt(
@@ -107,20 +23,32 @@ def update_pair_counts_opt(
     affected_docs_list: list[int],
     pre_tokens: PreTokens,
     token_pair_counter: TokenPairCounter,
+    region_timer: RegionTimer,
 ):
+    all_removed_pairs: dict[Pair, int] = {}
+    all_added_pairs: dict[Pair, int] = {}
     for idx, new_tokens in zip(affected_docs_list, new_tokens_list):
         tokens_count = pre_tokens.get_item_count(idx)
         tokens = pre_tokens[idx]
 
         # remove old pairs
         for i in range(len(tokens) - 1):
-            pair: tuple[bytes, bytes] = (tokens[i], tokens[i + 1])
-            token_pair_counter.remove_pair(pair, idx, tokens_count)
+            pair: Pair = (tokens[i], tokens[i + 1])
+            count: int = token_pair_counter.remove_pair(pair, idx, tokens_count, False)
+            all_removed_pairs[pair] = count
 
         # add new pairs
         for i in range(len(new_tokens) - 1):
-            pair: tuple[bytes, bytes] = (new_tokens[i], new_tokens[i + 1])
-            token_pair_counter.add_pair(pair, idx, tokens_count)
+            pair: Pair = (new_tokens[i], new_tokens[i + 1])
+            count: int = token_pair_counter.add_pair(pair, idx, tokens_count, False)
+            all_added_pairs[pair] = count
+    # bulk update heap
+    for pair, count in all_removed_pairs.items():
+        if count == 0:
+            continue
+        token_pair_counter.push_heap(pair, count)
+    for pair, count in all_added_pairs.items():
+        token_pair_counter.push_heap(pair, count)
 
 
 def train(
@@ -130,10 +58,6 @@ def train(
     fast: bool = True,
 ) -> BPETokenizerParams:
     timer.start("initialize")
-    if not pre_tokens_dict:
-        pre_tokens_dict = dict[bytes, int]()
-        with open("../data/pretokenization_output.dat", "rb") as in_f:
-            pre_tokens_dict = pickle.load(in_f)
     pre_tokens = PreTokens(pre_tokens_dict)
 
     pre_tokens_count = len(pre_tokens)
@@ -209,9 +133,15 @@ def train(
         if fast:
             timer.start("update pairs")
             update_pair_counts_opt(
-                new_pre_tokens_list, affected_docs_list, pre_tokens, token_pair_counter
+                new_pre_tokens_list,
+                affected_docs_list,
+                pre_tokens,
+                token_pair_counter,
+                region_timer=timer,
             )
-            assert token_pair_counter.get_token_count(merged_tokens) == 0
+            assert (
+                token_pair_counter.get_token_count(merged_tokens) == 0
+            ), f"After update, {merged_tokens} has count {token_pair_counter.get_token_count(merged_tokens)}, expected 0"
             timer.stop("update pairs")
 
         timer.start("update pre_tokens")
@@ -237,7 +167,12 @@ def train_bpe(
 ) -> BPETokenizerParams:
     timer = RegionTimer()
     timer.start("get pre-token counts")
-    pre_tokens_dict: dict[bytes, int] = get_pre_token_counts(input_path)
+    if input_path:
+        pre_tokens_dict: dict[bytes, int] = get_pre_token_counts(input_path)
+    else:
+        pre_tokens_dict = dict[bytes, int]()
+        with open("data/pretokenization_output.dat", "rb") as in_f:
+            pre_tokens_dict = pickle.load(in_f)
     timer.stop("get pre-token counts")
 
     bpe_params: BPETokenizerParams = train(
