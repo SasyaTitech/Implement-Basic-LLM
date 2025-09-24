@@ -56,6 +56,7 @@ class BPETokenizer(Tokenizer):
     vocab: dict[int, bytes]
     merges: list[Pair]
     merges_index_list: list[tuple[PairIndex, int]]
+    token_to_index: dict[bytes, int]
 
     def __init__(self, vocab: dict[int, bytes], merges: list[Pair], special_tokens: list[str] | None = None):
         self.vocab = vocab
@@ -67,6 +68,10 @@ class BPETokenizer(Tokenizer):
             if token in self.vocab:
                 continue
             self.vocab[len(self.vocab)] = token
+        
+        self.token_to_index = dict()
+        for token_index, token in self.vocab.items():
+            self.token_to_index[token] = token_index
 
         token_to_index = {v: k for k, v in vocab.items()}
         self.merges_index_list = []
@@ -91,6 +96,9 @@ class BPETokenizer(Tokenizer):
 
     def encode(self, string: str) -> list[int]:
         indices = list(map(int, string.encode("utf-8")))
+        for t, ind in enumerate(indices):
+            token = bytes([ind])
+            indices[t] = self.token_to_index[token]
         if len(indices) < 2:
             return indices
         # Note: this is a very slow implementation
@@ -110,7 +118,8 @@ class BPETokenizer(Tokenizer):
             if i not in self.vocab:
                 raise ValueError(f"Index {i} not in vocabulary")
             bytes_list.append(self.vocab[i])
-        string = b"".join(bytes_list).decode("utf-8", errors="replace")
+        byte_string = b"".join(bytes_list)
+        string = byte_string.decode("utf-8", errors="replace")
         return string
 
     def merge(self, indices: list[int], pair: PairIndex, new_index: int) -> list[int]:
@@ -151,3 +160,14 @@ if is_main_file:
     print(f"BPE tokenizer encoded '{demo}' to indices: {indices}")
     reconstructed_demo = tokenizer.decode(indices)  # should not raise
     assert demo == reconstructed_demo, f"Expected '{demo}', got '{reconstructed_demo}'"
+
+    # from tests.test_tokenizer import MERGES_PATH, VOCAB_PATH, get_tokenizer_from_vocab_merges_path
+    # tokenizer = get_tokenizer_from_vocab_merges_path(
+    #     vocab_path=VOCAB_PATH,
+    #     merges_path=MERGES_PATH,
+    # )
+    # test_string = "s"
+    # encoded_ids = tokenizer.encode(test_string)
+    # print(f"Encoded IDs for '{test_string}': {encoded_ids}")
+    # decoded_string = tokenizer.decode(encoded_ids)
+    # assert test_string == decoded_string, f"Expected '{test_string}', got '{decoded_string}'"
