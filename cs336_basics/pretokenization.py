@@ -138,7 +138,6 @@ def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
     if is_main_file:
         region_timer.report()
 
-    print(f"Total unique pre-tokens: {len(pre_tokens_dict)}")
     return pre_tokens_dict
 
 
