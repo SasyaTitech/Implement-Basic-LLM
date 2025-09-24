@@ -3,9 +3,11 @@ import os
 import pickle
 import regex as re
 from typing import Iterable, Iterator, Self
-from cs336_basics.pretokenization import convert_special_token_to_regex, word_pattern_compiled
+from cs336_basics.pretokenization import convert_special_token_to_regex, word_pattern_compiled, global_special_tokens
 from cs336_basics.region_timer import ContextTimer, RegionTimer
 from cs336_basics.token_pair_counter import Pair, PairIndex
+from rich.live import Live
+from rich.text import Text
 
 is_main_file: bool = __name__ == "__main__"
 
@@ -67,8 +69,10 @@ class BPETokenizer(Tokenizer):
     def __init__(self, vocab: dict[int, bytes], merges: list[Pair], special_tokens: list[str] | None = None):
         self.vocab = vocab
         self.merges = merges
-        self.special_tokens = special_tokens
-        assert len(merges) == len(vocab) - 256 - 1, f"Expected {len(vocab)-256-1} merges, got {len(merges)}"
+        self.special_tokens = special_tokens or global_special_tokens
+        self.special_tokens = sorted(self.special_tokens, reverse=True)
+        sp_tokens_count: int = len(self.special_tokens)
+        assert len(merges) == len(vocab) - 256 - sp_tokens_count, f"Expected {len(vocab)-256-sp_tokens_count} merges, got {len(merges)}"
 
         self.token_to_index = dict()
         for token_index, token in self.vocab.items():
@@ -146,6 +150,8 @@ class BPETokenizer(Tokenizer):
         for ma in self.pattern_compiled.finditer(string):
             start = ma.start()
             special_token: str = ma.group()
+            if is_main_file:
+                print(f"Found special token '{special_token}' at {start}-{ma.end()}")
             if start > end:
                 segment = string[end:start]
                 with ContextTimer(self.timer, "Convert simple string to indices", is_main_file):
@@ -186,10 +192,13 @@ class BPETokenizer(Tokenizer):
         return all_indices
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
-        for string in iterable:
-            for indices in self._convert_to_indices(string):
-                with ContextTimer(self.timer, "Merging indices", is_main_file):
-                    yield from self._merge_indices(indices)
+        with Live() as live:
+            for string in iterable:
+                if is_main_file:
+                    live.update(Text(string))
+                for indices in self._convert_to_indices(string):
+                    with ContextTimer(self.timer, "Merging indices", is_main_file):
+                        yield from self._merge_indices(indices)
 
     def decode(self, indices: list[int]) -> str:
         bytes_list: list[bytes] = []
@@ -232,13 +241,21 @@ if is_main_file:
 
     demo_vocab_file: str = "data/TinyStoriesV2-GPT4-valid-vocab.dat"
     demo_merges_file: str = "data/TinyStoriesV2-GPT4-valid-merges.dat"
-    tokenizer = BPETokenizer.from_files(demo_vocab_file, demo_merges_file, special_tokens=["<|endoftext|>"])
-    demo = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
+    tokenizer = BPETokenizer.from_files(demo_vocab_file, demo_merges_file, special_tokens=["<|endoftext|>", "<|endoftext|><|endoftext|>"])
+    demo = "Hello, how <|endoftext|><|endoftext|> are you?<|endoftext|>"
     indices = tokenizer.encode(demo)
     print(f"BPE tokenizer encoded '{demo}' to indices: {indices}")
     reconstructed_demo = tokenizer.decode(indices)  # should not raise
     assert demo == reconstructed_demo, f"Expected '{demo}', got '{reconstructed_demo}'"
     tokenizer.timer.report()
+
+
+    ids = tokenizer.encode(demo)
+    print(f"BPE tokenizer encoded '{demo}' to ids: {ids}")
+    tokenized_string = [tokenizer.decode([x]) for x in ids]
+    # Ensure the double <|endoftext|><|endoftext|> is preserved as a single token
+    assert tokenized_string.count("<|endoftext|>") == 1
+    assert tokenized_string.count("<|endoftext|><|endoftext|>") == 1
 
     # from tests.test_tokenizer import MERGES_PATH, VOCAB_PATH, get_tokenizer_from_vocab_merges_path
     # tokenizer = get_tokenizer_from_vocab_merges_path(

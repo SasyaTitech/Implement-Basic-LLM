@@ -63,9 +63,7 @@ def find_chunk_boundaries(
 
 
 def convert_special_token_to_regex(special_tokens: list[str]) -> re.Pattern[str]:
-    all_special_tokens: set[str] = set(global_special_tokens)
-    all_special_tokens.update(special_tokens)
-    split_pattern = "|".join(list(map(re.escape, all_special_tokens)))
+    split_pattern = "|".join(list(map(re.escape, special_tokens)))
     split_pattern_compiled = re.compile(split_pattern)
     return split_pattern_compiled
 
