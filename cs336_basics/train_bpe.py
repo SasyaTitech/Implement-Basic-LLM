@@ -1,21 +1,13 @@
-from dataclasses import dataclass
+import os
 import pickle
 from rich import print
 from rich.progress import track
 from cs336_basics.region_timer import RegionTimer
 from cs336_basics.pretokenization import get_pre_token_counts
 from cs336_basics.token_pair_counter import TokenPairCounter, PreTokens, Pair
+from cs336_basics.tokenizer import BPETokenizerParams
 
 is_main_file: bool = __name__ == "__main__"
-
-
-@dataclass(frozen=True)
-class BPETokenizerParams:
-    """All you need to specify a BPETokenizer."""
-
-    vocab: dict[int, bytes]  # index -> bytes
-    merges: dict[Pair, int]  # (bytes1, bytes2) -> new_index
-    merges_list: list[Pair]  # (bytes1, bytes2) in order of creation
 
 
 def update_pair_counts_opt(
@@ -23,7 +15,7 @@ def update_pair_counts_opt(
     affected_docs_list: list[int],
     pre_tokens: PreTokens,
     token_pair_counter: TokenPairCounter,
-    region_timer: RegionTimer 
+    region_timer: RegionTimer,
 ):
     region_timer.start("bulk update pairs")
     all_removed_pairs: dict[Pair, int] = {}
@@ -103,9 +95,7 @@ def train(
             break
 
         if iter < 5 or iter % 500 == 99:
-            print(
-                f"New token: {new_token} with count {new_token_count}.\tnew_token_idx={new_token_idx}"
-            )
+            print(f"New token: {new_token} with count {new_token_count}.\tnew_token_idx={new_token_idx}")
         timer.stop("add new token")
 
         # update current_tokens_dict and token_pair_counts
@@ -117,19 +107,14 @@ def train(
             new_pre_tokens: list[bytes] = []
             i = 0
             while i < len(old_pre_tokens):
-                if (
-                    i < len(old_pre_tokens) - 1
-                    and (old_pre_tokens[i], old_pre_tokens[i + 1]) == merged_tokens
-                ):
+                if i < len(old_pre_tokens) - 1 and (old_pre_tokens[i], old_pre_tokens[i + 1]) == merged_tokens:
                     new_pre_tokens.append(new_token)
                     i += 2
                 else:
                     new_pre_tokens.append(old_pre_tokens[i])
                     i += 1
 
-            assert len(new_pre_tokens) != len(
-                old_pre_tokens
-            ), f"Token {new_token} not found in pre_tokens"
+            assert len(new_pre_tokens) != len(old_pre_tokens), f"Token {new_token} not found in pre_tokens"
 
             new_pre_tokens_list.append(tuple(new_pre_tokens))
             affected_docs_list.append(idx)
@@ -137,8 +122,11 @@ def train(
 
         if fast:
             update_pair_counts_opt(
-                new_pre_tokens_list, affected_docs_list, pre_tokens, token_pair_counter,
-                region_timer=timer
+                new_pre_tokens_list,
+                affected_docs_list,
+                pre_tokens,
+                token_pair_counter,
+                region_timer=timer,
             )
             assert (
                 token_pair_counter.get_token_count(merged_tokens) == 0
@@ -153,18 +141,14 @@ def train(
             timer.start("rebuild pairs")
             token_pair_counter.init_from(pre_tokens)
             count: int = token_pair_counter.get_token_count(merged_tokens)
-            assert (
-                count == 0
-            ), f"After rebuilding, {merged_tokens} has count {count}, expected 0"
+            assert count == 0, f"After rebuilding, {merged_tokens} has count {count}, expected 0"
             timer.stop("rebuild pairs")
 
     assert len(bpe_params.vocab) <= vocab_size
     return bpe_params
 
 
-def train_bpe(
-    input_path: str, vocab_size: int, special_tokens: list[str]
-) -> BPETokenizerParams:
+def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> BPETokenizerParams:
     timer = RegionTimer()
     timer.start("get pre-token counts")
     if input_path:
@@ -175,9 +159,7 @@ def train_bpe(
             pre_tokens_dict = pickle.load(in_f)
     timer.stop("get pre-token counts")
 
-    bpe_params: BPETokenizerParams = train(
-        vocab_size - len(special_tokens), pre_tokens_dict, timer, fast=True
-    )
+    bpe_params: BPETokenizerParams = train(vocab_size - len(special_tokens), pre_tokens_dict, timer, fast=True)
     # Add special tokens at the end of the vocab
     for token in special_tokens:
         token = token.encode("utf-8")
@@ -188,6 +170,7 @@ def train_bpe(
     longest_token = max(bpe_params.vocab.values(), key=len)
     print(f"Longest token: {longest_token} with length {len(longest_token)}")
     timer.stop("find longest token")
+
     if is_main_file:
         timer.report()
     return bpe_params
@@ -209,5 +192,13 @@ if __name__ == "__main__":
     now = time.time()
     vocab_size = 10000 if "TinyStories" in args.file else 32000
 
-    train_bpe(args.file, vocab_size, ["<|endoftext|>"])
+    bpe_params: BPETokenizerParams = train_bpe(args.file, vocab_size, ["<|endoftext|>"])
     print(f"Time taken: {time.time() - now} seconds")
+    data_dir = os.path.dirname(args.file)
+
+    file_name = os.path.basename(args.file).replace(".txt", "")
+    with open(os.path.join(data_dir, f"{file_name}-vocab.dat"), "wb") as out_f:
+        pickle.dump(bpe_params.vocab, out_f)
+
+    with open(os.path.join(data_dir, f"{file_name}-merges.dat"), "wb") as out_f:
+        pickle.dump(bpe_params.merges_list, out_f)

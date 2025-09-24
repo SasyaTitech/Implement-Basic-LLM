@@ -30,6 +30,9 @@ build-backend = "uv_build"
 module-name = "cs336_basics"
 module-root = ""
 
+[tool.black]
+line-length = 120
+
 [tool.uv]
 package = true
 python-preference = "managed"

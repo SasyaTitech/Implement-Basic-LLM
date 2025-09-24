@@ -28,6 +28,7 @@ class PreTokens:
 
 
 Pair = tuple[bytes, bytes]
+PairIndex = tuple[int, int]
 
 
 @total_ordering
