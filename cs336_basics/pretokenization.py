@@ -8,9 +8,7 @@ import pickle
 from cs336_basics.region_timer import RegionTimer
 
 is_main_file: bool = __name__ == "__main__"
-word_pattern = (
-    r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-)
+word_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 word_pattern_compiled = re.compile(word_pattern)
 special_tokens = ["<|endoftext|>"]
 special_tokens = list(map(lambda x: re.escape(x), special_tokens))
@@ -27,9 +25,7 @@ def find_chunk_boundaries(
     Chunk the file into parts that can be counted independently.
     May return fewer chunks if the boundaries end up overlapping.
     """
-    assert isinstance(
-        split_special_token, bytes
-    ), "Must represent special token as a bytestring"
+    assert isinstance(split_special_token, bytes), "Must represent special token as a bytestring"
 
     # Get total file size in bytes
     file.seek(0, os.SEEK_END)
@@ -66,13 +62,19 @@ def find_chunk_boundaries(
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
 
+
 def to_pretoken(s: str, special_tokens: list[str]) -> list[bytes]:
     """Convert a string to a list of pre-tokens (bytes)."""
+    special_tokens = list(map(lambda x: re.escape(x), special_tokens))
+    split_pattern = "|".join(special_tokens)
+    split_pattern_compiled = re.compile(split_pattern)
+
     pre_tokens = []
-    for m in word_pattern_compiled.finditer(s):
-        word = m.group()
-        key = word.encode("utf-8")
-        pre_tokens.append(key)
+    for split_str in split_pattern_compiled.splititer(s):
+        for m in word_pattern_compiled.finditer(split_str):
+            word = m.group()
+            key = word.encode("utf-8")
+            pre_tokens.append(key)
     return pre_tokens
 
 
@@ -130,10 +132,7 @@ def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
         region_timer.start("process chunks")
         all_dicts = pool.starmap(
             process_chunk,
-            [
-                (t, file_path, start, end)
-                for t, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]))
-            ],
+            [(t, file_path, start, end) for t, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]))],
         )
         region_timer.stop("process chunks")
 
