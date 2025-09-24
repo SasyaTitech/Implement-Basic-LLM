@@ -66,6 +66,15 @@ def find_chunk_boundaries(
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
 
+def to_pretoken(s: str, special_tokens: list[str]) -> list[bytes]:
+    """Convert a string to a list of pre-tokens (bytes)."""
+    pre_tokens = []
+    for m in word_pattern_compiled.finditer(s):
+        word = m.group()
+        key = word.encode("utf-8")
+        pre_tokens.append(key)
+    return pre_tokens
+
 
 def process_doc(doc: str, pre_tokens_dict: dict[bytes, int]) -> None:
     for m in word_pattern_compiled.finditer(doc):
