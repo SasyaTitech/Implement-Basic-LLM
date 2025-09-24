@@ -23,8 +23,9 @@ def update_pair_counts_opt(
     affected_docs_list: list[int],
     pre_tokens: PreTokens,
     token_pair_counter: TokenPairCounter,
-    region_timer: RegionTimer,
+    region_timer: RegionTimer 
 ):
+    region_timer.start("bulk update pairs")
     all_removed_pairs: dict[Pair, int] = {}
     all_added_pairs: dict[Pair, int] = {}
     for idx, new_tokens in zip(affected_docs_list, new_tokens_list):
@@ -42,13 +43,17 @@ def update_pair_counts_opt(
             pair: Pair = (new_tokens[i], new_tokens[i + 1])
             count: int = token_pair_counter.add_pair(pair, idx, tokens_count, False)
             all_added_pairs[pair] = count
+    region_timer.stop("bulk update pairs")
+
     # bulk update heap
+    region_timer.start("bulk update heap")
     for pair, count in all_removed_pairs.items():
         if count == 0:
             continue
         token_pair_counter.push_heap(pair, count)
     for pair, count in all_added_pairs.items():
         token_pair_counter.push_heap(pair, count)
+    region_timer.stop("bulk update heap")
 
 
 def train(
@@ -133,11 +138,8 @@ def train(
         if fast:
             timer.start("update pairs")
             update_pair_counts_opt(
-                new_pre_tokens_list,
-                affected_docs_list,
-                pre_tokens,
-                token_pair_counter,
-                region_timer=timer,
+                new_pre_tokens_list, affected_docs_list, pre_tokens, token_pair_counter,
+                region_timer=timer
             )
             assert (
                 token_pair_counter.get_token_count(merged_tokens) == 0
