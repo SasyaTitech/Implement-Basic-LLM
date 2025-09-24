@@ -79,7 +79,7 @@ def process_chunk(idx: int, file_path: str, start: int, end: int) -> dict[bytes,
         f.seek(start)
         chunk: str = f.read(end - start).decode("utf-8")
         pre_tokens_dict: dict[bytes, int] = {}
-        if idx % 4 == 0:
+        if idx == 0:
             print(f"Processing chunk from {start} to {end}, size {len(chunk)} bytes")
             total_count = sum([1 for _ in split_pattern_compiled.splititer(chunk)])
             print(f"Total documents in chunk {idx}: {total_count}")
@@ -117,7 +117,7 @@ def get_pre_token_counts(file_path: str) -> dict[bytes, int]:
 
     # use multiprocessing to process each chunk in parallel
     pre_tokens_dict: dict[bytes, int] = {}
-    with multiprocessing.Pool(processes=4) as pool:
+    with multiprocessing.Pool(processes=6) as pool:
         region_timer.start("process chunks")
         all_dicts = pool.starmap(
             process_chunk,
