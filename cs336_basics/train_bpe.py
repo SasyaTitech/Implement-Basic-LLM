@@ -3,7 +3,7 @@ import pickle
 from rich import print
 from rich.progress import track
 from cs336_basics.region_timer import RegionTimer
-from cs336_basics.pretokenization import get_pre_token_counts
+from cs336_basics.pretokenization import get_pre_token_counts, global_special_tokens
 from cs336_basics.token_pair_counter import TokenPairCounter, PreTokens, Pair
 from cs336_basics.tokenizer import BPETokenizerParams
 
@@ -192,7 +192,7 @@ if __name__ == "__main__":
     now = time.time()
     vocab_size = 10000 if "TinyStories" in args.file else 32000
 
-    bpe_params: BPETokenizerParams = train_bpe(args.file, vocab_size, ["<|endoftext|>"])
+    bpe_params: BPETokenizerParams = train_bpe(args.file, vocab_size, global_special_tokens)
     print(f"Time taken: {time.time() - now} seconds")
     data_dir = os.path.dirname(args.file)
 

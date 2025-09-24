@@ -10,9 +10,8 @@ from cs336_basics.region_timer import RegionTimer
 is_main_file: bool = __name__ == "__main__"
 word_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 word_pattern_compiled = re.compile(word_pattern)
-special_tokens = ["<|endoftext|>"]
-special_tokens = list(map(lambda x: re.escape(x), special_tokens))
-split_pattern = "|".join(special_tokens)
+global_special_tokens = ["<|endoftext|>"]
+split_pattern = "|".join(list(map(re.escape, global_special_tokens)))
 split_pattern_compiled = re.compile(split_pattern)
 
 
@@ -63,19 +62,12 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def to_pretoken(s: str, special_tokens: list[str]) -> list[bytes]:
-    """Convert a string to a list of pre-tokens (bytes)."""
-    special_tokens = list(map(lambda x: re.escape(x), special_tokens))
-    split_pattern = "|".join(special_tokens)
+def convert_special_token_to_regex(special_tokens: list[str]) -> re.Pattern[str]:
+    all_special_tokens: set[str] = set(global_special_tokens)
+    all_special_tokens.update(special_tokens)
+    split_pattern = "|".join(list(map(re.escape, all_special_tokens)))
     split_pattern_compiled = re.compile(split_pattern)
-
-    pre_tokens = []
-    for split_str in split_pattern_compiled.splititer(s):
-        for m in word_pattern_compiled.finditer(split_str):
-            word = m.group()
-            key = word.encode("utf-8")
-            pre_tokens.append(key)
-    return pre_tokens
+    return split_pattern_compiled
 
 
 def process_doc(doc: str, pre_tokens_dict: dict[bytes, int]) -> None:

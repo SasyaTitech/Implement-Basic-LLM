@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 import pickle
+import regex as re
 from typing import Iterable, Iterator, Self
+from cs336_basics.pretokenization import convert_special_token_to_regex, word_pattern_compiled
+from cs336_basics.region_timer import ContextTimer, RegionTimer
 from cs336_basics.token_pair_counter import Pair, PairIndex
 
 
@@ -57,18 +60,23 @@ class BPETokenizer(Tokenizer):
     merges: list[Pair]
     merges_index_list: list[tuple[PairIndex, int]]
     token_to_index: dict[bytes, int]
+    special_tokens: list[str] | None
+    pattern_compiled: re.Pattern[str]
+    timer: RegionTimer
 
     def __init__(self, vocab: dict[int, bytes], merges: list[Pair], special_tokens: list[str] | None = None):
         self.vocab = vocab
         self.merges = merges
+        self.special_tokens = special_tokens
         assert len(merges) == len(vocab) - 256 - 1, f"Expected {len(vocab)-256-1} merges, got {len(merges)}"
 
+        self.pattern_compiled = convert_special_token_to_regex(self.special_tokens or [])
         for token_str in special_tokens or []:
             token: bytes = token_str.encode("utf-8")
             if token in self.vocab:
                 continue
             self.vocab[len(self.vocab)] = token
-        
+
         self.token_to_index = dict()
         for token_index, token in self.vocab.items():
             self.token_to_index[token] = token_index
@@ -81,6 +89,8 @@ class BPETokenizer(Tokenizer):
             pari_right_index = token_to_index[merge[1]]
             merge_index = (pair_left_index, pari_right_index)
             self.merges_index_list.append((merge_index, index))
+        
+        self.timer = RegionTimer()
 
     @classmethod
     def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] | None = None) -> Self:
@@ -93,12 +103,62 @@ class BPETokenizer(Tokenizer):
             merges = pickle.load(merges_f)
 
         return cls(vocab, merges, special_tokens)
+    
+    def start_timer(self, region_name: str) -> None:
+        if not is_main_file: 
+            return
+        self.timer.start(region_name)
+    
+    def stop_timer(self, region_name: str) -> None:
+        if not is_main_file:
+            return
+        self.timer.stop(region_name)
 
-    def encode(self, string: str) -> list[int]:
-        indices = list(map(int, string.encode("utf-8")))
-        for t, ind in enumerate(indices):
-            token = bytes([ind])
-            indices[t] = self.token_to_index[token]
+    def _convert_simple_string_to_indices(self, string: str) -> Iterable[list[int]]:
+        if is_main_file:
+            print(f"Converting simple string to indices: '{string}'")
+        indices = []
+        for m in word_pattern_compiled.finditer(string):
+            word = m.group()
+            pre_tokens: bytes = word.encode("utf-8")
+            with ContextTimer(self.timer, "Get byte token indices", is_main_file):
+                for token_b in pre_tokens:
+                    token: bytes = bytes([token_b])
+                    index: int = self.token_to_index[token]
+                    indices.append(index)
+            yield indices
+            indices.clear()
+
+    def _convert_to_indices(self, string: str) -> Iterable[list[int]]:
+        start: int = 0
+        end: int = 0
+        if is_main_file:
+            self.timer.start("Convert to indices")
+        for ma in self.pattern_compiled.finditer(string):
+            start = ma.start()
+            special_token: str = ma.group()
+            if start > end:
+                segment = string[end:start]
+                with ContextTimer(self.timer, "Convert simple string to indices", is_main_file):
+                    yield from self._convert_simple_string_to_indices(segment)
+            
+            with ContextTimer(self.timer, "Get special token index", is_main_file):
+                # Add the special token itself
+                token: bytes = special_token.encode("utf-8")
+                index: int = self.token_to_index[token]
+                yield [index]
+            end = ma.end()
+        if is_main_file:
+            self.timer.stop("Convert to indices")
+
+        # Process any remaining text after the last special token
+        remaining = string[end:]
+        if not remaining:
+            return
+        with ContextTimer(self.timer, "Convert simple string to indices", is_main_file):
+            yield from self._convert_simple_string_to_indices(remaining)
+    
+    def _merge_indices(self, indices: list[int]) -> list[int]:
         if len(indices) < 2:
             return indices
         # Note: this is a very slow implementation
@@ -108,15 +168,24 @@ class BPETokenizer(Tokenizer):
                 return indices
         return indices
 
+    def encode(self, string: str) -> list[int]:
+        all_indices: list[int] = []
+        for indices in self._convert_to_indices(string):
+            with ContextTimer(self.timer, "Merging indices", is_main_file):
+                merged_indices = self._merge_indices(indices)
+                all_indices.extend(merged_indices)
+        return all_indices
+
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         for string in iterable:
-            yield from self.encode(string)
+            for indices in self._convert_to_indices(string):
+                with ContextTimer(self.timer, "Merging indices", is_main_file):
+                    yield from self._merge_indices(indices)
 
     def decode(self, indices: list[int]) -> str:
         bytes_list: list[bytes] = []
         for i in indices:
-            if i not in self.vocab:
-                raise ValueError(f"Index {i} not in vocabulary")
+            assert i in self.vocab, f"Index {i} not in vocabulary"
             bytes_list.append(self.vocab[i])
         byte_string = b"".join(bytes_list)
         string = byte_string.decode("utf-8", errors="replace")
@@ -155,11 +224,12 @@ if is_main_file:
     demo_vocab_file: str = "data/TinyStoriesV2-GPT4-valid-vocab.dat"
     demo_merges_file: str = "data/TinyStoriesV2-GPT4-valid-merges.dat"
     tokenizer = BPETokenizer.from_files(demo_vocab_file, demo_merges_file, special_tokens=["<|endoftext|>"])
-    demo = "s"
+    demo = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
     indices = tokenizer.encode(demo)
     print(f"BPE tokenizer encoded '{demo}' to indices: {indices}")
     reconstructed_demo = tokenizer.decode(indices)  # should not raise
     assert demo == reconstructed_demo, f"Expected '{demo}', got '{reconstructed_demo}'"
+    tokenizer.timer.report()
 
     # from tests.test_tokenizer import MERGES_PATH, VOCAB_PATH, get_tokenizer_from_vocab_merges_path
     # tokenizer = get_tokenizer_from_vocab_merges_path(
