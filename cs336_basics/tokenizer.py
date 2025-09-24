@@ -1,11 +1,11 @@
 from dataclasses import dataclass
+import os
 import pickle
 import regex as re
 from typing import Iterable, Iterator, Self
 from cs336_basics.pretokenization import convert_special_token_to_regex, word_pattern_compiled
 from cs336_basics.region_timer import ContextTimer, RegionTimer
 from cs336_basics.token_pair_counter import Pair, PairIndex
-
 
 is_main_file: bool = __name__ == "__main__"
 
@@ -70,16 +70,20 @@ class BPETokenizer(Tokenizer):
         self.special_tokens = special_tokens
         assert len(merges) == len(vocab) - 256 - 1, f"Expected {len(vocab)-256-1} merges, got {len(merges)}"
 
-        self.pattern_compiled = convert_special_token_to_regex(self.special_tokens or [])
-        for token_str in special_tokens or []:
-            token: bytes = token_str.encode("utf-8")
-            if token in self.vocab:
-                continue
-            self.vocab[len(self.vocab)] = token
-
         self.token_to_index = dict()
         for token_index, token in self.vocab.items():
             self.token_to_index[token] = token_index
+
+        self.pattern_compiled = convert_special_token_to_regex(self.special_tokens or [])
+        for token_str in special_tokens or []:
+            token: bytes = token_str.encode("utf-8")
+            if token in self.token_to_index:
+                continue
+            print(f"Adding special token {token} to vocabulary at index {len(self.vocab)}")
+            index = len(self.vocab)
+            self.vocab[index] = token
+            self.token_to_index[token] = index
+
 
         token_to_index = {v: k for k, v in vocab.items()}
         self.merges_index_list = []
@@ -89,11 +93,16 @@ class BPETokenizer(Tokenizer):
             pari_right_index = token_to_index[merge[1]]
             merge_index = (pair_left_index, pari_right_index)
             self.merges_index_list.append((merge_index, index))
-        
+
         self.timer = RegionTimer()
 
     @classmethod
-    def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] | None = None) -> Self:
+    def from_files(
+        cls,
+        vocab_filepath: str | os.PathLike,
+        merges_filepath: str | os.PathLike,
+        special_tokens: list[str] | None = None,
+    ) -> Self:
         vocab: dict[int, bytes] = dict()
         with open(vocab_filepath, "rb") as vocab_f:
             vocab = pickle.load(vocab_f)
@@ -103,12 +112,12 @@ class BPETokenizer(Tokenizer):
             merges = pickle.load(merges_f)
 
         return cls(vocab, merges, special_tokens)
-    
+
     def start_timer(self, region_name: str) -> None:
-        if not is_main_file: 
+        if not is_main_file:
             return
         self.timer.start(region_name)
-    
+
     def stop_timer(self, region_name: str) -> None:
         if not is_main_file:
             return
@@ -141,7 +150,7 @@ class BPETokenizer(Tokenizer):
                 segment = string[end:start]
                 with ContextTimer(self.timer, "Convert simple string to indices", is_main_file):
                     yield from self._convert_simple_string_to_indices(segment)
-            
+
             with ContextTimer(self.timer, "Get special token index", is_main_file):
                 # Add the special token itself
                 token: bytes = special_token.encode("utf-8")
@@ -157,7 +166,7 @@ class BPETokenizer(Tokenizer):
             return
         with ContextTimer(self.timer, "Convert simple string to indices", is_main_file):
             yield from self._convert_simple_string_to_indices(remaining)
-    
+
     def _merge_indices(self, indices: list[int]) -> list[int]:
         if len(indices) < 2:
             return indices
