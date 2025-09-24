@@ -136,7 +136,6 @@ def train(
         timer.stop("update tokens")
 
         if fast:
-            timer.start("update pairs")
             update_pair_counts_opt(
                 new_pre_tokens_list, affected_docs_list, pre_tokens, token_pair_counter,
                 region_timer=timer
@@ -144,7 +143,6 @@ def train(
             assert (
                 token_pair_counter.get_token_count(merged_tokens) == 0
             ), f"After update, {merged_tokens} has count {token_pair_counter.get_token_count(merged_tokens)}, expected 0"
-            timer.stop("update pairs")
 
         timer.start("update pre_tokens")
         for idx, new_tokens_tuple in zip(affected_docs_list, new_pre_tokens_list):
