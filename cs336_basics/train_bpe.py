@@ -4,7 +4,7 @@ from rich import print
 from rich.progress import track
 from cs336_basics.region_timer import RegionTimer
 from cs336_basics.pretokenization import get_pre_token_counts, global_special_tokens
-from cs336_basics.token_pair_counter import TokenPairCounter, PreTokens, Pair
+from cs336_basics.token_pair import TokenPairCounter, PreTokens, Pair
 from cs336_basics.tokenizer import BPETokenizerParams
 
 is_main_file: bool = __name__ == "__main__"

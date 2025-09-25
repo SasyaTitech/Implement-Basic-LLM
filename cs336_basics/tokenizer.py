@@ -279,6 +279,7 @@ def get_compression_ratio(string: str, indices: list[int]) -> float:
 
 
 if is_main_file:
+    import time
     string = "Hello, 🌍! 你好!"
     tokenizer = ByteTokenizer()
     indices = tokenizer.encode(string)
@@ -290,25 +291,11 @@ if is_main_file:
     demo_vocab_file: str = "data/TinyStoriesV2-GPT4-valid-vocab.dat"
     demo_merges_file: str = "data/TinyStoriesV2-GPT4-valid-merges.dat"
     tokenizer = BPETokenizer.from_files(demo_vocab_file, demo_merges_file, special_tokens=["<|endoftext|>"])
-    # demo = "Hello, how <|endoftext|><|endoftext|> are you?<|endoftext|>"
-    # indices = tokenizer.encode(demo)
-    # print(f"BPE tokenizer encoded '{demo}' to indices: {indices}")
-    # reconstructed_demo = tokenizer.decode(indices)  # should not raise
-    # assert demo == reconstructed_demo, f"Expected '{demo}', got '{reconstructed_demo}'"
 
-    # from tests.test_tokenizer import MERGES_PATH, VOCAB_PATH, get_tokenizer_from_vocab_merges_path
-    # tokenizer = get_tokenizer_from_vocab_merges_path(
-    #     vocab_path=VOCAB_PATH,
-    #     merges_path=MERGES_PATH,
-    # )
-    # test_string = "s"
-    # encoded_ids = tokenizer.encode(test_string)
-    # print(f"Encoded IDs for '{test_string}': {encoded_ids}")
-    # decoded_string = tokenizer.decode(encoded_ids)
-    # assert test_string == decoded_string, f"Expected '{test_string}', got '{decoded_string}'"
-
+    now = time.time()
     with open(FIXTURES_PATH / "tinystories_sample_5M.txt") as f:
         ids = []
         for _id in tokenizer.encode_iterable(f):
             ids.append(_id)
     tokenizer.timer.report()
+    print(f"Tokenized {len(ids)} tokens in {time.time()-now:.2f} seconds")
