@@ -1,17 +1,15 @@
-from collections import defaultdict
 from dataclasses import dataclass
+import multiprocessing
 import os
 import pickle
 import regex as re
 from typing import Iterable, Iterator, Self
-from cs336_basics.pretokenization import convert_special_token_to_regex, word_pattern_compiled, global_special_tokens
+from cs336_basics.pretokenization import convert_special_token_to_regex, find_chunk_boundaries, word_pattern_compiled, global_special_tokens, split_pattern_compiled
 from cs336_basics.region_timer import ContextTimer, RegionTimer
 from cs336_basics.token_pair import Pair, PairIndex, PairIndexState
 from rich.live import Live
 from rich.text import Text
-import heapq
-
-from tests.common import FIXTURES_PATH
+import numpy as np
 
 is_main_file: bool = __name__ == "__main__"
 logging_enabled: bool = False and is_main_file
@@ -278,24 +276,126 @@ def get_compression_ratio(string: str, indices: list[int]) -> float:
     return num_bytes / num_tokens
 
 
+def generate_docs(idx: int, start: int, end: int, file_path: str) -> Iterator[str]:
+    with open(file_path, "rb") as f:
+        f.seek(start)
+        chunk: str = f.read(end - start).decode("utf-8")
+        for doc in split_pattern_compiled.splititer(chunk):
+            yield doc
+
+def process_chunk(idx: int, file_path: str, start: int, end: int) -> list[np.uint16]:
+    now = time.time()
+    token_list: list[np.uint16] = []
+    chunk_size = end - start
+    token_count: int = 0
+    for doc in generate_docs(idx, start, end, file_path):
+        indices = tokenizer.encode(doc)
+        indices.append(tokenizer.token_to_index[b"<|endoftext|>"])
+        token_count += len(indices)
+        token_list.extend(np.array(indices, dtype=np.uint16))
+    time_taken = time.time() - now
+    compress_ratio = chunk_size / token_count if token_count > 0 else 0
+    bytes_per_sec = chunk_size / time_taken / 1024 / 1024
+    print(f"Processed chunk {idx+1}, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s compression ratio {compress_ratio:.2f}")
+    return token_list
+
+def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
+    from rich.progress import track
+    now = time.time()
+    total_bytes: int = 0
+    with open(file_path, "rb") as f:
+        # get file size
+        f.seek(0, os.SEEK_END)
+        total_bytes = f.tell()
+        file_size = total_bytes / 1024 / 1024  # in MB
+        f.seek(0)
+        print(f"File size: {file_size:.2f} MB")
+        num_processes = max(20, int(file_size // 10) + 1)
+        print(f"Using {num_processes} processes")
+        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+
+        # The following is a serial implementation, but you can parallelize this
+        # by sending each start/end pair to a set of processes.
+        print(f"Found {len(boundaries)-1} chunks")
+
+    token_count: int = 0
+    all_indices: list[np.uint16] = []
+    with multiprocessing.Pool(processes=10) as pool:
+        all_token_lists = pool.starmap(
+            process_chunk,
+            [(t, file_path, start, end) for t, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]))],
+        )
+        for token_list in all_token_lists:
+            all_indices.extend(token_list)
+            token_count += len(token_list)
+    time_taken = time.time() - now
+
+    compress_ratio: float = total_bytes / token_count
+    bytes_per_sec = total_bytes / time_taken / 1024 / 1024
+    print("-" * 80)
+    print(f"Generate {token_count / 1000 / 1000:.2f}M tokens, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s, compression ratio {compress_ratio:.2f}")
+
+    all_indices_np = np.array(all_indices, dtype=np.uint16)
+    output_file = file_path.replace(".txt", "-bpe.npy")
+    np.save(output_file, all_indices_np)
+    print(f"Saved {len(all_indices_np) / 1000 / 1000:.2f}M tokens to {output_file}")
+    return
+
+
 if is_main_file:
     import time
-    string = "Hello, 🌍! 你好!"
-    tokenizer = ByteTokenizer()
-    indices = tokenizer.encode(string)
-    reconstructed_string = tokenizer.decode(indices)
-    assert string == reconstructed_string
-    compression_ratio = get_compression_ratio(string, indices)
-    print(f"Byte tokenizer Compression ratio: {compression_ratio:.2f}")
+    import argparse
 
-    demo_vocab_file: str = "data/TinyStoriesV2-GPT4-valid-vocab.dat"
-    demo_merges_file: str = "data/TinyStoriesV2-GPT4-valid-merges.dat"
-    tokenizer = BPETokenizer.from_files(demo_vocab_file, demo_merges_file, special_tokens=["<|endoftext|>"])
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--file",
+        type=str,
+        default="data/TinyStoriesV2-GPT4-train.txt",
+        help="Path to the input text file.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="If set, do not actually run the tokenizer, just print the first 10 documents.",
+    )
+    parser.add_argument(
+        "--test",
+        type=str,
+        default="",
+        help="If set, run a test on the given string.",
+    )
+
+    arg = parser.parse_args()
 
     now = time.time()
-    with open(FIXTURES_PATH / "tinystories_sample_5M.txt") as f:
-        ids = []
-        for _id in tokenizer.encode_iterable(f):
-            ids.append(_id)
-    tokenizer.timer.report()
-    print(f"Tokenized {len(ids)} tokens in {time.time()-now:.2f} seconds")
+    file_path = arg.file
+
+    # Load the tokenizer
+    file_prefix = file_path.replace("train.txt", "train")
+    file_prefix = file_prefix.replace("valid.txt", "train")
+    vocab_file: str = f"{file_prefix}-vocab.dat"
+    merges_file: str = f"{file_prefix}-merges.dat"
+    print(f"Loading tokenizer from {vocab_file} and {merges_file}")
+    tokenizer = BPETokenizer.from_files(vocab_file, merges_file, special_tokens=["<|endoftext|>"])
+
+    if arg.dry_run:
+        sum_compress_ratio: float = 0.0
+        sample_file: str = f"{file_prefix}-sample.pkl"
+        with open(sample_file, "rb") as f:
+            all_docs: list[str] = pickle.load(f)
+        print(f"Loaded {len(all_docs)} documents from {sample_file}")
+        total_bytes: int = 0
+        token_count: int = 0
+        for doc in all_docs[:10]:
+            indices = tokenizer.encode(doc)
+            doc_bytes = doc.encode("utf-8")
+            total_bytes += len(doc_bytes)
+            token_count += len(indices)
+            decoded = tokenizer.decode(indices)
+            assert doc == decoded, f"Decoded document does not match original. Original: {doc}, Decoded: {decoded}"
+        print(f"Total time: {time.time() - now:.2f} seconds compression ratio {total_bytes / token_count:.2f}")
+        tokenizer.timer.report()
+    else:
+        file_path = arg.test if arg.test else arg.file
+        process_file(file_path, tokenizer)
+
