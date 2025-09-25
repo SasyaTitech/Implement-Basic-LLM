@@ -1,6 +1,8 @@
 import heapq
 from functools import total_ordering
 
+from cs336_basics.region_timer import ContextTimer, RegionTimer
+
 
 class PreTokens:
     all_docs: list[tuple[bytes, ...]]
@@ -83,9 +85,7 @@ class TokenPairCounter:
                 self.add_pair(pair, idx, tokens_count, update_heap=False)
         self._rebuild_heap()
 
-    def add_pair(
-        self, pair: Pair, doc_idx: int, count: int, update_heap: bool = True
-    ) -> int:
+    def add_pair(self, pair: Pair, doc_idx: int, count: int, update_heap: bool = True) -> int:
         if pair not in self.pair_counts:
             self.pair_counts[pair] = 0
             self.pair_to_pretokens[pair] = set()
@@ -127,11 +127,7 @@ class TokenPairCounter:
         if not self.pair_counts:
             return ((b"", b""), 0)
         if len(self._max_heap) >= 3 * len(self.pair_counts):
-            print(
-                "Rebuilding heap... {} pairs, {} heap size".format(
-                    len(self.pair_counts), len(self._max_heap)
-                )
-            )
+            print("Rebuilding heap... {} pairs, {} heap size".format(len(self.pair_counts), len(self._max_heap)))
             self._rebuild_heap()
         return self._peek_valid_max()
         # max_count = 0
@@ -155,3 +151,66 @@ class TokenPairCounter:
         self.pair_counts.clear()
         self.pair_to_pretokens.clear()
         self._max_heap.clear()
+
+
+class PairIndexState:
+    pair_state: dict[PairIndex, int]
+    pairs_heap: list[tuple[int, PairIndex]]
+    timer: RegionTimer
+    is_main_file: bool
+    merges_index_dict: dict[PairIndex, int]
+
+    def __init__(self, merges: dict[PairIndex, int], t: RegionTimer, is_main_file: bool) -> None:
+        self.pair_state = {}
+        self.pairs_heap = []
+        self.timer = t
+        self.is_main_file = is_main_file
+        self.merges_index_dict = merges
+
+    def rebuild(self, indices: list[int]) -> None:
+        for i in range(len(indices) - 1):
+            pair: PairIndex = (indices[i], indices[i + 1])
+            if pair not in self.pair_state:
+                self.pair_state[pair] = 1
+            else:
+                self.pair_state[pair] += 1
+
+            if pair in self.merges_index_dict:
+                index = self.merges_index_dict[pair]
+                self.pairs_heap.append((index, pair))
+        heapq.heapify(self.pairs_heap)
+
+    def count(self, pair: PairIndex) -> int:
+        return self.pair_state.get(pair, 0)
+
+    def add(self, pair: PairIndex) -> None:
+        """Add one instance of `pair` to `pair_state`."""
+        with ContextTimer(self.timer, "Add pair to state", self.is_main_file):
+            self.pair_state[pair] = self.pair_state.get(pair, 0) + 1
+            if pair not in self.merges_index_dict:
+                return
+            index = self.merges_index_dict[pair]
+            heapq.heappush(self.pairs_heap, (index, pair))
+
+    def remove(self, pair: PairIndex) -> None:
+        """Remove one instance of `pair` from `pair_state`."""
+        with ContextTimer(self.timer, "Remove pair from state", self.is_main_file):
+            new_count = self.pair_state[pair] - 1
+            self.pair_state[pair] = new_count
+
+            if not self.is_main_file:
+                return
+
+            assert new_count >= 0, f"Negative count current pair {pair}."
+            if new_count == 0:
+                del self.pair_state[pair]
+
+    def get_next(self) -> tuple[PairIndex, int]:
+        while self.pairs_heap:
+            d: tuple[int, PairIndex] = heapq.heappop(self.pairs_heap)
+            index: int = d[0]
+            pair: PairIndex = d[1]
+            if self.pair_state.get(pair, 0) == 0:
+                continue
+            return pair, index
+        return (0, 0), -1
