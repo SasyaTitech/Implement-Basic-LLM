@@ -302,7 +302,6 @@ def process_chunk(idx: int, file_path: str, start: int, end: int) -> int:
     output_file = file_path.replace(".txt", f"-bpe-{idx}.npy")
     np.save(output_file, np_data)
     print(f"Saved {len(np_data) / 1000 / 1000:.2f}M tokens to {output_file}")
-    gc.collect()
     return np_data.shape[0]
 
 def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
