@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import gc
 import multiprocessing
 import os
 import pickle
@@ -283,7 +284,7 @@ def generate_docs(idx: int, start: int, end: int, file_path: str) -> Iterator[st
         for doc in split_pattern_compiled.splititer(chunk):
             yield doc
 
-def process_chunk(idx: int, file_path: str, start: int, end: int) -> list[np.uint16]:
+def process_chunk(idx: int, file_path: str, start: int, end: int) -> int:
     now = time.time()
     token_list: list[np.uint16] = []
     chunk_size = end - start
@@ -297,7 +298,12 @@ def process_chunk(idx: int, file_path: str, start: int, end: int) -> list[np.uin
     compress_ratio = chunk_size / token_count if token_count > 0 else 0
     bytes_per_sec = chunk_size / time_taken / 1024 / 1024
     print(f"Processed chunk {idx+1}, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s compression ratio {compress_ratio:.2f}")
-    return token_list
+    np_data = np.array(token_list, dtype=np.uint16)
+    output_file = file_path.replace(".txt", f"-bpe-{idx}.npy")
+    np.save(output_file, np_data)
+    print(f"Saved {len(np_data) / 1000 / 1000:.2f}M tokens to {output_file}")
+    gc.collect()
+    return np_data.shape[0]
 
 def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
     from rich.progress import track
@@ -310,7 +316,7 @@ def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
         file_size = total_bytes / 1024 / 1024  # in MB
         f.seek(0)
         print(f"File size: {file_size:.2f} MB")
-        num_processes = max(20, int(file_size // 10) + 1)
+        num_processes = max(10, int(file_size // 100) + 1)
         print(f"Using {num_processes} processes")
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
@@ -319,26 +325,18 @@ def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
         print(f"Found {len(boundaries)-1} chunks")
 
     token_count: int = 0
-    all_indices: list[np.uint16] = []
     with multiprocessing.Pool(processes=10) as pool:
         all_token_lists = pool.starmap(
             process_chunk,
             [(t, file_path, start, end) for t, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]))],
         )
-        for token_list in all_token_lists:
-            all_indices.extend(token_list)
-            token_count += len(token_list)
+        for c in all_token_lists:
+            token_count += c
     time_taken = time.time() - now
-
     compress_ratio: float = total_bytes / token_count
     bytes_per_sec = total_bytes / time_taken / 1024 / 1024
     print("-" * 80)
     print(f"Generate {token_count / 1000 / 1000:.2f}M tokens, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s, compression ratio {compress_ratio:.2f}")
-
-    all_indices_np = np.array(all_indices, dtype=np.uint16)
-    output_file = file_path.replace(".txt", "-bpe.npy")
-    np.save(output_file, all_indices_np)
-    print(f"Saved {len(all_indices_np) / 1000 / 1000:.2f}M tokens to {output_file}")
     return
 
 
