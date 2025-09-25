@@ -284,7 +284,7 @@ def generate_docs(idx: int, start: int, end: int, file_path: str) -> Iterator[st
         for doc in split_pattern_compiled.splititer(chunk):
             yield doc
 
-def process_chunk(idx: int, file_path: str, start: int, end: int) -> int:
+def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPETokenizer) -> int:
     now = time.time()
     token_list: list[np.uint16] = []
     chunk_size = end - start
@@ -315,7 +315,7 @@ def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
         file_size = total_bytes / 1024 / 1024  # in MB
         f.seek(0)
         print(f"File size: {file_size:.2f} MB")
-        num_processes = max(10, int(file_size // 100) + 1)
+        num_processes = max(10, int(file_size // 20) + 1)
         print(f"Using {num_processes} processes")
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
@@ -327,7 +327,7 @@ def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
     with multiprocessing.Pool(processes=10) as pool:
         all_token_lists = pool.starmap(
             process_chunk,
-            [(t, file_path, start, end) for t, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]))],
+            [(t, file_path, start, end, tokenizer) for t, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]))],
         )
         for c in all_token_lists:
             token_count += c
