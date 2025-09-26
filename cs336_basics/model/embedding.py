@@ -18,8 +18,8 @@ class Embedding(nn.Module):
         nn.init.trunc_normal_(init_tensor, mean=0, std=1, a=-3, b=3)
         self.weight = nn.Parameter(init_tensor)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.weight[x]
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        return self.weight[token_ids]
     
     def extra_repr(self) -> str:
         return f"num_embeddings={self.num_embeddings}, embedding_dim={self.embedding_dim}"
