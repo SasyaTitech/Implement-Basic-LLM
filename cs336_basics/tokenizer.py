@@ -291,7 +291,7 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
         print(f"Chunk {idx+1} already processed, skipping")
         return 0
     now = time.time()
-    token_list: list[np.ndarray] = []
+    token_list: list[np.uint16] = []
     chunk_size = end - start
     token_count: int = 0
     for doc in generate_docs(idx, start, end, file_path):
@@ -300,7 +300,7 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
         indices = tokenizer.encode(doc)
         indices.append(tokenizer.token_to_index[b"<|endoftext|>"])
         token_count += len(indices)
-        token_list.append(np.array(indices, dtype=np.uint16))
+        token_list.extend(np.array(indices, dtype=np.uint16))
     time_taken = time.time() - now
     compress_ratio = chunk_size / token_count if token_count > 0 else 0
     bytes_per_sec = chunk_size / time_taken / 1024 / 1024
