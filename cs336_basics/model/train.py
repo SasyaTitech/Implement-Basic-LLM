@@ -7,6 +7,7 @@ import random
 from einops import rearrange, einsum
 from jaxtyping import Float, Int, jaxtyped
 from beartype import beartype as typechecker
+from cs336_basics.model.linear import Linear
 
 is_main_file = __name__ == "__main__"
 
@@ -25,22 +26,6 @@ def get_device(index: int = 0) -> torch.device:
         return torch.device(f"cuda:{index}")
     else:
         return torch.device("cpu")
-
-
-class Linear(nn.Module):
-    in_features: int
-    out_features: int
-
-    def __init__(self, in_features: int, out_features: int):
-        super().__init__()
-        init_tensort = torch.randn(in_features, out_features) / np.sqrt(in_features)
-        self.weight = nn.Parameter(init_tensort)
-        self.bias = nn.Parameter(torch.randn(out_features) / np.sqrt(out_features))
-        self.in_features = in_features
-        self.out_features = out_features
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return einsum(x, self.weight, "batch input, input output->batch output") + self.bias
 
 
 class LinearModel(nn.Module):
