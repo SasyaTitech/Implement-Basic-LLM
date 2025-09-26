@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from einops import rearrange, einsum
 import numpy as np
-from cs336_basics.model.silu import SiLU
+from cs336_basics.model.activation import SiLU
 from cs336_basics.model.linear import Linear
 
 

@@ -8,7 +8,9 @@ class Linear(nn.Module):
     in_features: int
     out_features: int
 
-    def __init__(self, in_features: int, out_features: int, device: torch.device | None = None, dtype: torch.dtype | None = None):
+    def __init__(
+        self, in_features: int, out_features: int, device: torch.device | None = None, dtype: torch.dtype | None = None
+    ):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -22,6 +24,6 @@ class Linear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return einsum(x, self.weight, "... input, output input->... output")
-    
+
     def extra_repr(self) -> str:
         return f"in_features={self.in_features}, out_features={self.out_features}"
