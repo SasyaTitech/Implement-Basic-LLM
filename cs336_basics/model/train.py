@@ -8,6 +8,7 @@ from einops import rearrange, einsum
 from jaxtyping import Float, Int, jaxtyped
 from beartype import beartype as typechecker
 from cs336_basics.model.linear import Linear
+from cs336_basics.model.common import get_device
 
 is_main_file = __name__ == "__main__"
 
@@ -18,14 +19,6 @@ torch.manual_seed(seed)
 np.random.seed(seed)
 # Python
 random.seed(seed)
-
-
-def get_device(index: int = 0) -> torch.device:
-    """Try to use the GPU if possible, otherwise, use CPU."""
-    if torch.cuda.is_available():
-        return torch.device(f"cuda:{index}")
-    else:
-        return torch.device("cpu")
 
 
 class LinearModel(nn.Module):
