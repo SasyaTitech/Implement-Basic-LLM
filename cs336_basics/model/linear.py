@@ -14,7 +14,6 @@ class Linear(nn.Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        nn.Linear
 
         # make parameters in the correct device and dtype
         init_tensor = torch.empty(out_features, in_features, device=device, dtype=dtype)
