@@ -47,8 +47,14 @@ class RoPE(nn.Module):
 
     @jaxtyped(typechecker=typechecker)
     def forward(
-        self, x: Float[torch.Tensor, "... seq_len d_k"], token_positions: Int[torch.Tensor, "... seq_len"]
+        self, x: Float[torch.Tensor, "... seq_len d_k"], 
+        token_positions: Int[torch.Tensor, "... seq_len"] | None = None
     ) -> Float[torch.Tensor, "... seq_len d_k"]:
+        if token_positions is None:
+            batch_dims = x.shape[:-2]
+            seq_len = x.shape[-2]
+            token_positions = torch.arange(0, seq_len, device=x.device)
+            token_positions = token_positions.expand(*batch_dims, seq_len)
         assert x.shape[-2] == token_positions.shape[-1], f"x shape {x.shape} and token_positions shape {token_positions.shape} are not compatible"
         cos = self.cos[token_positions]
         sin = self.sin[token_positions]

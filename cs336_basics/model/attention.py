@@ -1,4 +1,3 @@
-from typing import Optional
 import torch
 from torch import nn, Tensor
 from einops import rearrange, einsum
@@ -67,14 +66,11 @@ class MultiHeadAttention(nn.Module):
 
         self.register_buffer("causal_mask", None, persistent=False)
 
-    def _get_causal_mask(
-        self, seq_len: int, device: torch.device
-    ) -> Float[Tensor, "seq_len seq_len"]:
+    @jaxtyped(typechecker=typechecker)
+    def _get_causal_mask(self, seq_len: int, device: torch.device) -> Bool[Tensor, "seq_len seq_len"]:
         if self.causal_mask is None or self.causal_mask.shape[0] < seq_len:
-            max_seq_len = max(seq_len, 2048)  
-            self.causal_mask = torch.tril(
-                torch.ones(max_seq_len, max_seq_len, device=device, dtype=torch.bool)
-            )
+            max_seq_len = max(seq_len, 2048)
+            self.causal_mask = torch.ones(max_seq_len, max_seq_len, device=device, dtype=torch.bool).tril(0)
         return self.causal_mask[:seq_len, :seq_len]
 
     @jaxtyped(typechecker=typechecker)
@@ -105,12 +101,10 @@ class MultiHeadAttention(nn.Module):
             query, "... seq_len (heads d_k) -> ... heads seq_len d_k", heads=self.num_heads, seq_len=seq_len
         )
         if self.rope is not None:
-            assert token_positions is not None, "token_positions must be provided when using RoPE"
             query = self.rope(query, token_positions)
 
         key = rearrange(key, "... seq_len (heads d_k) -> ... heads seq_len d_k", heads=self.num_heads, seq_len=seq_len)
         if self.rope is not None:
-            assert token_positions is not None, "token_positions must be provided when using RoPE"
             key = self.rope(key, token_positions)
 
         value = rearrange(

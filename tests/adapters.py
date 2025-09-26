@@ -303,7 +303,20 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from cs336_basics.model.transformer import TransformerBlock
+    transformer_block = TransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta, device=in_features.device, dtype=in_features.dtype)
+    transformer_block.multi_head_attention.wq.weight.data = weights["attn.q_proj.weight"]
+    transformer_block.multi_head_attention.wk.weight.data = weights["attn.k_proj.weight"]
+    transformer_block.multi_head_attention.wv.weight.data = weights["attn.v_proj.weight"]
+    transformer_block.multi_head_attention.wo.weight.data = weights["attn.output_proj.weight"]
+    transformer_block.rms_norm1.scale.data = weights["ln1.weight"]
+
+    transformer_block.ffn.fc1.weight.data = weights["ffn.w1.weight"]
+    transformer_block.ffn.fc2.weight.data = weights["ffn.w2.weight"]
+    transformer_block.ffn.fc3.weight.data = weights["ffn.w3.weight"]
+    transformer_block.rms_norm2.scale.data = weights["ln2.weight"]
+
+    return transformer_block(in_features)
 
 
 def run_transformer_lm(
