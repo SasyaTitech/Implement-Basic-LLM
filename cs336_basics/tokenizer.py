@@ -281,25 +281,31 @@ def generate_docs(idx: int, start: int, end: int, file_path: str) -> Iterator[st
     with open(file_path, "rb") as f:
         f.seek(start)
         chunk: str = f.read(end - start).decode("utf-8")
-        for doc in split_pattern_compiled.splititer(chunk):
-            yield doc
+    for doc in split_pattern_compiled.splititer(chunk):
+        yield doc
 
 def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPETokenizer) -> int:
+    # check np file exists
+    output_file = file_path.replace(".txt", f"-bpe-{idx}.npy")
+    if os.path.exists(output_file):
+        print(f"Chunk {idx+1} already processed, skipping")
+        return 0
     now = time.time()
-    token_list: list[np.uint16] = []
+    token_list: list[np.ndarray] = []
     chunk_size = end - start
     token_count: int = 0
     for doc in generate_docs(idx, start, end, file_path):
+        if len(doc) == 0:
+            continue
         indices = tokenizer.encode(doc)
         indices.append(tokenizer.token_to_index[b"<|endoftext|>"])
         token_count += len(indices)
-        token_list.extend(np.array(indices, dtype=np.uint16))
+        token_list.append(np.array(indices, dtype=np.uint16))
     time_taken = time.time() - now
     compress_ratio = chunk_size / token_count if token_count > 0 else 0
     bytes_per_sec = chunk_size / time_taken / 1024 / 1024
     print(f"Processed chunk {idx+1}, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s compression ratio {compress_ratio:.2f}")
     np_data = np.array(token_list, dtype=np.uint16)
-    output_file = file_path.replace(".txt", f"-bpe-{idx}.npy")
     np.save(output_file, np_data)
     print(f"Saved {len(np_data) / 1000 / 1000:.2f}M tokens to {output_file}")
     return np_data.shape[0]
