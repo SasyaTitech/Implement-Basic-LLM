@@ -25,3 +25,6 @@ class RMSNorm(nn.Module):
 
     def extra_repr(self) -> str:
         return f"dim={self.dim}, eps={self.eps}"
+
+
+# todo: try to implement https://arxiv.org/abs/2503.10622
