@@ -4,6 +4,9 @@ import torch
 from torch import nn
 import numpy as np
 import random
+from einops import rearrange, einsum
+from jaxtyping import Float, Int, jaxtyped
+from beartype import beartype as typechecker
 
 is_main_file = __name__ == "__main__"
 
@@ -37,7 +40,7 @@ class Linear(nn.Module):
         self.out_features = out_features
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x @ self.weight + self.bias
+        return einsum(x, self.weight, "batch input, input output->batch output") + self.bias
 
 
 class LinearModel(nn.Module):
@@ -48,7 +51,8 @@ class LinearModel(nn.Module):
             self.layers.append(Linear(dim, dim))
         self.final_layer = Linear(dim, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    @jaxtyped(typechecker=typechecker)
+    def forward(self, x: Float[torch.Tensor, "batch dim"]) -> Float[torch.Tensor, "batch"]:
         B, D = x.shape
         assert (
             D == self.layers[0].in_features
