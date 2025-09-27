@@ -75,6 +75,7 @@ class BPETokenizer(Tokenizer):
     special_tokens: list[str] | None
     pattern_compiled: re.Pattern[str]
     timer: RegionTimer
+    encode_cache: dict[str, tuple[int, ...]] = {}
 
     def __init__(self, vocab: dict[int, bytes], merges: list[Pair], special_tokens: list[str] | None = None):
         self.vocab = vocab
@@ -141,28 +142,42 @@ class BPETokenizer(Tokenizer):
         if not is_main_file:
             return
         self.timer.stop(region_name)
+    
+    def _convert_pretoken_to_indices(self, str: str) -> list[int]:
+        indices: list[int] = []
+        pre_tokens: bytes = str.encode("utf-8")
+        for token_b in pre_tokens:
+            token: bytes = bytes([token_b])
+            index: int = self.token_to_index[token]
+            indices.append(index)
+        return indices
+    
+    def _convert_string_to_pretokens(self, string: str) -> list[str]:
+        with ContextTimer(self.timer, "Get byte token indices", is_main_file):
+            pretokens: list[str] = []
+            if logging_enabled:
+                print(f"Converting simple string to indices: '{string}'")
+            for m in word_pattern_compiled.finditer(string):
+                pretokens.append(m.group())
+        return pretokens
 
-    def _convert_simple_string_to_indices(self, string: str) -> Iterable[list[int]]:
-        if logging_enabled:
-            print(f"Converting simple string to indices: '{string}'")
-        indices = []
-        for m in word_pattern_compiled.finditer(string):
-            with ContextTimer(self.timer, "Get byte token indices", is_main_file):
-                indices.clear()
-                word = m.group()
-                pre_tokens: bytes = word.encode("utf-8")
-                for token_b in pre_tokens:
-                    token: bytes = bytes([token_b])
-                    index: int = self.token_to_index[token]
-                    indices.append(index)
-            yield indices
+    def _process_string(self, string: str) -> list[int]:
+        pretokens: list[str] = self._convert_string_to_pretokens(string)
+        indices: list[int] = []
+        for pretoken in pretokens:
+            if pretoken not in self.encode_cache:
+                part_indices = self._convert_pretoken_to_indices(pretoken)
+                part_indices = self._merge_indices(part_indices)
+                self.encode_cache[pretoken] = tuple(part_indices)
+                indices.extend(part_indices)
+            else:
+                indices.extend(self.encode_cache[pretoken])
+        return indices
 
-    def _convert_to_indices(self, string: str) -> Iterable[list[int]]:
+    def encode(self, string: str) -> list[int]:
+        indices: list[int] = []
         if not self.special_tokens:
-            yield from self._convert_simple_string_to_indices(string)
-            return
-        if is_main_file:
-            self.timer.start("Convert to indices")
+            return self._process_string(string)
         chunks = self.pattern_compiled.splititer(string)
         for part in chunks:
             if not isinstance(part, str):
@@ -172,25 +187,15 @@ class BPETokenizer(Tokenizer):
                     print(f"Found special token: '{part}'")
                 token: bytes = part.encode("utf-8")
                 index: int = self.token_to_index[token]
-                yield [index]
+                indices.append(index)
             else:
-                yield from self._convert_simple_string_to_indices(part)
-        if is_main_file:
-            self.timer.stop("Convert to indices")
-
-    def encode(self, string: str) -> list[int]:
-        all_indices: list[int] = []
-        for indices in self._convert_to_indices(string):
-            with ContextTimer(self.timer, "Merging indices", is_main_file):
-                merged_indices = self._merge_indices(indices)
-                all_indices.extend(merged_indices)
-        return all_indices
+                part_indices = self._process_string(part)
+                indices.extend(part_indices)
+        return indices
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
-        for i, string in enumerate(iterable):
-            for indices in self._convert_to_indices(string):
-                with ContextTimer(self.timer, "Merging indices", is_main_file):
-                    yield from self._merge_indices(indices)
+        for string in iterable:
+            yield from self.encode(string)
 
     def decode(self, indices: list[int]) -> str:
         bytes_list: list[bytes] = []
@@ -202,20 +207,21 @@ class BPETokenizer(Tokenizer):
         return string
 
     def _merge_indices(self, indices: list[int]) -> list[int]:
-        if len(indices) < 2:
-            return indices
-        
-        pair_state: PairIndexState = PairIndexState(self.merges_index_dict, self.timer, is_main_file)
-        pair_state.rebuild(indices)
-
-        while True:
-            pair, new_index = pair_state.get_next()
-            if new_index < 0:
-                break
-            indices = self._merge(indices, pair, new_index, pair_state)
+        with ContextTimer(self.timer, "Merging indices", is_main_file):
             if len(indices) < 2:
                 return indices
-        return indices
+            
+            pair_state: PairIndexState = PairIndexState(self.merges_index_dict, self.timer, is_main_file)
+            pair_state.rebuild(indices)
+
+            while True:
+                pair, new_index = pair_state.get_next()
+                if new_index < 0:
+                    break
+                indices = self._merge(indices, pair, new_index, pair_state)
+                if len(indices) < 2:
+                    return indices
+            return indices
 
     def _merge(
         self, indices: list[int], pair: PairIndex, new_index: int, pair_state: PairIndexState
@@ -461,6 +467,7 @@ if is_main_file:
     elif not arg.multi_process:
         file_path = arg.test if arg.test else arg.file
         process_file(file_path, tokenizer)
+        tokenizer.timer.report()
     else:
         file_path = arg.test if arg.test else arg.file
         process_file_multi_process(file_path, tokenizer)
