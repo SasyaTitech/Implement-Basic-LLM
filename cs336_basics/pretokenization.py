@@ -62,12 +62,6 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def convert_special_token_to_regex(special_tokens: list[str]) -> re.Pattern[str]:
-    split_pattern = "|".join(list(map(re.escape, special_tokens)))
-    split_pattern_compiled = re.compile(split_pattern)
-    return split_pattern_compiled
-
-
 def process_doc(doc: str, pre_tokens_dict: dict[bytes, int]) -> None:
     for m in word_pattern_compiled.finditer(doc):
         word = m.group()

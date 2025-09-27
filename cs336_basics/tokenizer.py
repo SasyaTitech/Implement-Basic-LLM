@@ -5,7 +5,7 @@ import os
 import pickle
 import regex as re
 from typing import Iterable, Iterator, Self
-from cs336_basics.pretokenization import convert_special_token_to_regex, find_chunk_boundaries, word_pattern_compiled, global_special_tokens, split_pattern_compiled
+from cs336_basics.pretokenization import find_chunk_boundaries, word_pattern_compiled, global_special_tokens, split_pattern_compiled
 from cs336_basics.region_timer import ContextTimer, RegionTimer
 from cs336_basics.token_pair import Pair, PairIndex, PairIndexState
 from rich.live import Live
@@ -59,6 +59,11 @@ class ByteTokenizer(Tokenizer):
         return string
 
 
+def convert_special_token_to_regex(special_tokens: list[str]) -> re.Pattern[str]:
+    split_pattern = "|".join(list(map(re.escape, special_tokens)))
+    split_pattern_compiled = re.compile(split_pattern)
+    return split_pattern_compiled
+
 class BPETokenizer(Tokenizer):
     """BPE tokenizer given a set of merges and a vocabulary."""
 
@@ -85,7 +90,9 @@ class BPETokenizer(Tokenizer):
         for token_index, token in self.vocab.items():
             self.token_to_index[token] = token_index
 
-        self.pattern_compiled = convert_special_token_to_regex(self.special_tokens or [])
+        split_pattern = "(" + "|".join(list(map(re.escape, self.special_tokens))) + ")"
+        self.pattern_compiled = re.compile(split_pattern)
+
         for token_str in special_tokens or []:
             token: bytes = token_str.encode("utf-8")
             if token in self.token_to_index:
@@ -151,33 +158,25 @@ class BPETokenizer(Tokenizer):
             yield indices
 
     def _convert_to_indices(self, string: str) -> Iterable[list[int]]:
-        start: int = 0
-        end: int = 0
+        if not self.special_tokens:
+            yield from self._convert_simple_string_to_indices(string)
+            return
         if is_main_file:
             self.timer.start("Convert to indices")
-        for ma in self.pattern_compiled.finditer(string):
-            start = ma.start()
-            special_token: str = ma.group()
-            if logging_enabled:
-                print(f"Found special token '{special_token}' at {start}-{ma.end()}")
-            if start > end:
-                segment = string[end:start]
-                yield from self._convert_simple_string_to_indices(segment)
-
-            with ContextTimer(self.timer, "Get special token index", is_main_file):
-                # Add the special token itself
-                token: bytes = special_token.encode("utf-8")
+        chunks = self.pattern_compiled.splititer(string)
+        for part in chunks:
+            if not isinstance(part, str):
+                continue
+            if part in self.special_tokens:
+                if logging_enabled:
+                    print(f"Found special token: '{part}'")
+                token: bytes = part.encode("utf-8")
                 index: int = self.token_to_index[token]
-            yield [index]
-            end = ma.end()
+                yield [index]
+            else:
+                yield from self._convert_simple_string_to_indices(part)
         if is_main_file:
             self.timer.stop("Convert to indices")
-
-        # Process any remaining text after the last special token
-        remaining = string[end:]
-        if not remaining:
-            return
-        yield from self._convert_simple_string_to_indices(remaining)
 
     def encode(self, string: str) -> list[int]:
         all_indices: list[int] = []
@@ -304,7 +303,7 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
     time_taken = time.time() - now
     compress_ratio = chunk_size / token_count if token_count > 0 else 0
     bytes_per_sec = chunk_size / time_taken / 1024 / 1024
-    print(f"Processed chunk {idx+1}, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s compression ratio {compress_ratio:.2f}")
+    print(f"Processed chunk {idx+1}, time_taken={time_taken:.2f} seconds, speed={bytes_per_sec:.2f} MB/s, compression ratio={compress_ratio:.2f}")
     mm.flush()
     print(f"Saved {token_count / 1000 / 1000:.2f}M tokens to {output_file}")
 
@@ -391,11 +390,12 @@ def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
     del mm
     gc.collect()
 
-    print(f"File size: {os.path.getsize(output_file):,} bytes")
+    pre_size = os.path.getsize(output_file)
     # Truncate the file to the real size (2 bytes per token)
     with open(output_file, "r+b") as f:
         f.truncate(idx * 2)
-    print(f"File size after truncation: {os.path.getsize(output_file):,} bytes")
+    after_size = os.path.getsize(output_file)
+    print(f"File size before truncation: {pre_size:,} bytes, after truncation: {after_size:,} bytes")
     return
 
 
