@@ -188,12 +188,10 @@ class BPETokenizer(Tokenizer):
         return all_indices
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
-        with Live() as live:
-            for i, string in enumerate(iterable):
-                live.update(Text(f"{i}: {string}"))
-                for indices in self._convert_to_indices(string):
-                    with ContextTimer(self.timer, "Merging indices", is_main_file):
-                        yield from self._merge_indices(indices)
+        for i, string in enumerate(iterable):
+            for indices in self._convert_to_indices(string):
+                with ContextTimer(self.timer, "Merging indices", is_main_file):
+                    yield from self._merge_indices(indices)
 
     def decode(self, indices: list[int]) -> str:
         bytes_list: list[bytes] = []
@@ -310,7 +308,7 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
     print(f"Saved {len(np_data) / 1000 / 1000:.2f}M tokens to {output_file}")
     return np_data.shape[0]
 
-def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
+def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> None:
     from rich.progress import track
     now = time.time()
     total_bytes: int = 0
@@ -344,6 +342,43 @@ def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
     print(f"Generate {token_count / 1000 / 1000:.2f}M tokens, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s, compression ratio {compress_ratio:.2f}")
     return
 
+def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
+    from rich.progress import track
+    now = time.time()
+    total_bytes: int = 0
+    sample_size = 250_000
+    with open(file_path, "rb") as f:
+        # get file size
+        f.seek(0, os.SEEK_END)
+        total_bytes = f.tell()
+        file_size = total_bytes / 1024 / 1024  # in MB
+        f.seek(0)
+        print(f"File size: {file_size:.2f} MB")
+        sample_bytes = f.read(sample_size)
+    sample_str = sample_bytes.decode("utf-8", errors="replace")
+    sample_tokens = tokenizer.encode(sample_str)
+    sample_compress_ratio = get_compression_ratio(sample_str, sample_tokens)
+    print(f"Sampled {sample_size} bytes, got {len(sample_tokens)} tokens, compression ratio {sample_compress_ratio:.2f}")
+
+    approx_total_tokens = int(total_bytes / sample_compress_ratio)
+    print(f"Estimated total tokens: {approx_total_tokens / 1_000_000:.2f}M")
+    print('-' * 80)
+    output_file = file_path.replace(".txt", f"-bpe.npy")
+    mm = np.memmap(output_file, dtype=np.uint16, mode="w+", shape=(int(approx_total_tokens * 1.15),))
+    idx = 0
+    with open(file_path, "r") as f:
+        for token_id in track(tokenizer.encode_iterable(f), total=approx_total_tokens, description="Tokenizing"):
+            mm[idx] = token_id
+            idx += 1
+    time_taken = time.time() - now
+    bytes_per_sec = total_bytes / time_taken / 1024 / 1024
+    compress_ratio = total_bytes / idx
+    print(f"Time taken: {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s, compression ratio {compress_ratio:.2f}")
+    print(f"Generated {idx / 1000 / 1000:.2f}M tokens, saved to {output_file}")
+    mm.flush()
+    del mm
+    return
+
 
 if is_main_file:
     import time
@@ -366,6 +401,12 @@ if is_main_file:
         type=str,
         default="",
         help="If set, run a test on the given string.",
+    )
+    parser.add_argument(
+        "--single-process",
+        action="store_true",
+        default=True,
+        help="If set, run in single-process mode.",
     )
 
     arg = parser.parse_args()
@@ -398,7 +439,10 @@ if is_main_file:
             assert doc == decoded, f"Decoded document does not match original. Original: {doc}, Decoded: {decoded}"
         print(f"Total time: {time.time() - now:.2f} seconds compression ratio {total_bytes / token_count:.2f}")
         tokenizer.timer.report()
-    else:
+    elif arg.single_process:
         file_path = arg.test if arg.test else arg.file
         process_file(file_path, tokenizer)
+    else:
+        file_path = arg.test if arg.test else arg.file
+        process_file_multi_process(file_path, tokenizer)
 

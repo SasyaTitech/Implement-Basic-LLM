@@ -168,7 +168,7 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> BP
     # find longest token
     timer.start("find longest token")
     longest_token = max(bpe_params.vocab.values(), key=len)
-    print(f"Longest token: {longest_token} with length {len(longest_token)}")
+    print(f"Longest token: {longest_token} str={longest_token.decode('utf-8')} with length {len(longest_token)}")
     timer.stop("find longest token")
 
     if is_main_file:
@@ -196,9 +196,10 @@ if __name__ == "__main__":
     print(f"Time taken: {time.time() - now} seconds")
     data_dir = os.path.dirname(args.file)
 
-    file_name = os.path.basename(args.file).replace(".txt", "")
-    with open(os.path.join(data_dir, f"{file_name}-vocab.dat"), "wb") as out_f:
-        pickle.dump(bpe_params.vocab, out_f)
+    if "train.txt" in args.file:
+        file_name = os.path.basename(args.file).replace(".txt", "")
+        with open(os.path.join(data_dir, f"{file_name}-vocab.dat"), "wb") as out_f:
+            pickle.dump(bpe_params.vocab, out_f)
 
-    with open(os.path.join(data_dir, f"{file_name}-merges.dat"), "wb") as out_f:
-        pickle.dump(bpe_params.merges_list, out_f)
+        with open(os.path.join(data_dir, f"{file_name}-merges.dat"), "wb") as out_f:
+            pickle.dump(bpe_params.merges_list, out_f)
