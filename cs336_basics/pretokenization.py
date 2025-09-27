@@ -8,8 +8,8 @@ import pickle
 from cs336_basics.region_timer import RegionTimer
 
 is_main_file: bool = __name__ == "__main__"
-word_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-word_pattern_compiled = re.compile(word_pattern)
+pretokenize_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+pretokenize_pattern_compiled = re.compile(pretokenize_pattern)
 global_special_tokens = ["<|endoftext|>"]
 split_pattern = "|".join(list(map(re.escape, global_special_tokens)))
 split_pattern_compiled = re.compile(split_pattern)
@@ -63,7 +63,7 @@ def find_chunk_boundaries(
 
 
 def process_doc(doc: str, pre_tokens_dict: dict[bytes, int]) -> None:
-    for m in word_pattern_compiled.finditer(doc):
+    for m in pretokenize_pattern_compiled.finditer(doc):
         word = m.group()
         key = word.encode("utf-8")
         pre_tokens_dict[key] = pre_tokens_dict.get(key, 0) + 1
