@@ -27,7 +27,7 @@ class SwiGLU(nn.Module):
 
 
     @jaxtyped(typechecker=typechecker)
-    def forward(self, x: Float[Tensor, "..., in_features"]) -> Float[Tensor, "..., in_features"]:
+    def forward(self, x: Float[Tensor, "... in_features"]) -> Float[Tensor, "... in_features"]:
         """
         x: (..., dim)
         fc1: (dim_ff, dim)

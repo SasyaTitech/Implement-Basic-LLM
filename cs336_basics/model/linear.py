@@ -24,7 +24,7 @@ class Linear(nn.Module):
         self.weight = nn.Parameter(init_tensor)
 
     @jaxtyped(typechecker=typechecker)
-    def forward(self, x: Float[Tensor, "..., in_features"]) -> Float[Tensor, "..., out_features"]:
+    def forward(self, x: Float[Tensor, "... in_features"]) -> Float[Tensor, "... out_features"]:
         """
         x: (..., in_features)
         weight: (out_features, in_features)

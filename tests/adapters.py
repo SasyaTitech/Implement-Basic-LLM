@@ -398,7 +398,33 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    from cs336_basics.model.transformer import TransformerLM, TransformerBlock
+    transformer_lm = TransformerLM(vocab_size=vocab_size, 
+                                   num_layers=num_layers, 
+                                   d_model=d_model, 
+                                   num_heads=num_heads, 
+                                   d_ff=d_ff, 
+                                   max_seq_len=context_length, 
+                                   theta=rope_theta, 
+                                   device=in_indices.device, dtype=torch.float32)
+    transformer_lm.token_embedding.weight.data = weights["token_embeddings.weight"]
+    for i in range(num_layers):
+        layer = transformer_lm.layers[i]
+        if not isinstance(layer, TransformerBlock):
+            raise ValueError("Expected TransformerBlock instance in TransformerLM layers")
+        layer.multi_head_attention.wq.weight.data = weights[f"layers.{i}.attn.q_proj.weight"]
+        layer.multi_head_attention.wk.weight.data = weights[f"layers.{i}.attn.k_proj.weight"]
+        layer.multi_head_attention.wv.weight.data = weights[f"layers.{i}.attn.v_proj.weight"]
+        layer.multi_head_attention.wo.weight.data = weights[f"layers.{i}.attn.output_proj.weight"]
+        layer.rms_norm1.scale.data = weights[f"layers.{i}.ln1.weight"]
+
+        layer.ffn.fc1.weight.data = weights[f"layers.{i}.ffn.w1.weight"]
+        layer.ffn.fc2.weight.data = weights[f"layers.{i}.ffn.w2.weight"]
+        layer.ffn.fc3.weight.data = weights[f"layers.{i}.ffn.w3.weight"]
+        layer.rms_norm2.scale.data = weights[f"layers.{i}.ln2.weight"]
+    transformer_lm.rms_norm.scale.data = weights["ln_final.weight"]
+    transformer_lm.lm_head.weight.data = weights["lm_head.weight"]
+    return transformer_lm(in_indices)
 
 
 def run_rmsnorm(
