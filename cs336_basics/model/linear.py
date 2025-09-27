@@ -1,7 +1,9 @@
 import torch
-from torch import nn
+from torch import nn, Tensor
 from einops import rearrange, einsum
 import numpy as np
+from jaxtyping import Float, Int, jaxtyped, Bool
+from beartype import beartype as typechecker
 
 
 class Linear(nn.Module):
@@ -21,7 +23,14 @@ class Linear(nn.Module):
         nn.init.trunc_normal_(init_tensor, mean=0, std=std, a=-3 * std, b=3 * std)
         self.weight = nn.Parameter(init_tensor)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    @jaxtyped(typechecker=typechecker)
+    def forward(self, x: Float[Tensor, "..., in_features"]) -> Float[Tensor, "..., out_features"]:
+        """
+        x: (..., in_features)
+        weight: (out_features, in_features)
+        Flops: 2 * in_features * out_features * ... (batch size and other dimensions)
+        Output: (..., out_features)
+        """
         return einsum(x, self.weight, "... input, output input->... output")
 
     def extra_repr(self) -> str:

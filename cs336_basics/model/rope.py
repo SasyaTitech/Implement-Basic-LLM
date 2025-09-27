@@ -25,7 +25,7 @@ class RoPE(nn.Module):
             max_seq_len,
         ), f"pos shape {seq_pos.shape} does not match expected shape {(max_seq_len,)}"
 
-        inv_freq = einsum(seq_pos, inv_freq, "pos , d_k_2 -> pos d_k_2")
+        inv_freq = einsum(seq_pos, inv_freq, "pos, d_k_2 -> pos d_k_2")
 
         cos = torch.cos(inv_freq)
         assert cos.shape == (
@@ -50,6 +50,14 @@ class RoPE(nn.Module):
         self, x: Float[torch.Tensor, "... seq_len d_k"], 
         token_positions: Int[torch.Tensor, "... seq_len"] | None = None
     ) -> Float[torch.Tensor, "... seq_len d_k"]:
+        """
+        x: (..., seq_len, d_k)
+        token_positions: (..., seq_len) or None
+        FLOPS_x_even_rot: 3 * seq_len * d_k/2 * ... (batch size and other dimensions)
+        FLOPS_x_odd_sin: 3 * seq_len * d_k/2 * ... (batch size and other dimensions)
+        Total FLOPS: 3 * seq_len * d_k * ... (batch size and other dimensions)
+        Output: (..., seq_len, d_k)
+        """
         if token_positions is None:
             batch_dims = x.shape[:-2]
             seq_len = x.shape[-2]

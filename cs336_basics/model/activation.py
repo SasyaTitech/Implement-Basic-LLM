@@ -9,6 +9,11 @@ class SiLU(nn.Module):
         super().__init__()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (..., )
+        Output: (..., )
+        Flops: 3 * ... (batch size and other dimensions)
+        """
         return x * torch.sigmoid(x)
 
     def extra_repr(self) -> str:

@@ -21,6 +21,14 @@ class Attention(nn.Module):
         value: Float[Tensor, "batch ... m d_v"],
         mask: Bool[Tensor, "batch ... n m"] | None = None,
     ) -> Float[Tensor, "batch ... n d_v"]:
+        """
+        query: (batch, ..., n, d_k)
+        key: (batch, ..., m, d_k)
+        value: (batch, ..., m, d_v)
+        mask: (batch, ..., n, m) or None
+        FLOPS: 2 * n * m * (d_k + d_v) * ... (batch size and other dimensions)
+        Output: (batch, ..., n, d_v)
+        """
         d_k = query.shape[-1]
         assert key.shape[-1] == query.shape[-1], f"Key shape {key.shape} must match query shape {query.shape}"
         assert value.shape[-2] == key.shape[-2], f"Value shape {value.shape} must match key shape {key.shape}"
@@ -92,6 +100,14 @@ class MultiHeadAttention(nn.Module):
     def forward(
         self, x: Float[Tensor, "... seq_len d_model"], token_positions: Int[Tensor, "... seq_len"] | None = None
     ) -> Float[Tensor, "... d_model"]:
+        """
+        x: (..., seq_len, d_model)
+        token_positions: (..., seq_len) or None
+        FLOPS_ATTN: 4 * seq_len^2 * d_model * ... (batch size and other dimensions)
+        FLOPS_wq_wk_wv_wo: 4 * 2 * d_model * d_model * seq_len * ... (batch size and other dimensions)
+        Total FLOPS: FLOPS_ATTN + FLOPS_wq_wk_wv_wo
+        Output: (..., seq_len, d_model)
+        """
         seq_len = x.shape[-2]
         query = self.wq(x)
         key = self.wk(x)

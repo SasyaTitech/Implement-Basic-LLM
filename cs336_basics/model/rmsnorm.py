@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from einops import rearrange, einsum
 import numpy as np
+from jaxtyping import Float, Int, jaxtyped, Bool
+from beartype import beartype as typechecker
 
 
 class RMSNorm(nn.Module):
@@ -13,7 +15,14 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.scale = nn.Parameter(torch.ones(dim, device=device, dtype=dtype))
 
+    @jaxtyped(typechecker=typechecker)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (..., dim)
+        scale: (dim,)
+        Flops: 2 * dim * ... (batch size and other dimensions) for power, sum, division, sqrt, multiplication
+        Output: (..., dim)
+        """
         assert x.shape[-1] == self.dim, f"Input dimension {x.shape[-1]} does not match RMSNorm dimension {self.dim}"
         in_dtype = x.dtype
         x = x.to(torch.float32)
