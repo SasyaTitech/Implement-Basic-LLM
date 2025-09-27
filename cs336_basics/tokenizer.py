@@ -325,7 +325,7 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
     print(f"File size before truncation: {pre_size:,} bytes, after truncation: {after_size:,} bytes") 
     return token_count
 
-def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> None:
+def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> int:
     from rich.progress import track
     now = time.time()
     total_bytes: int = 0
@@ -357,7 +357,7 @@ def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> None:
     bytes_per_sec = total_bytes / time_taken / 1024 / 1024
     print("-" * 80)
     print(f"Generate {token_count / 1000 / 1000:.2f}M tokens, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s, compression ratio {compress_ratio:.2f}")
-    return
+    return len(boundaries) - 1
 
 def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
     from rich.progress import track
@@ -470,5 +470,17 @@ if is_main_file:
         tokenizer.timer.report()
     else:
         file_path = arg.test if arg.test else arg.file
-        process_file_multi_process(file_path, tokenizer)
+        part_file_count: int = process_file_multi_process(file_path, tokenizer)
+        # merge all part files
+        output_file = file_path.replace(".txt", f"-bpe-merged.npy")
+        total_tokens = 0
+        with open(output_file, "wb") as out_f:
+            for i in range(part_file_count):
+                part_file = file_path.replace(".txt", f"-bpe-{i}.npy")
+                part_size = os.path.getsize(part_file)
+                total_tokens += part_size // 2
+                with open(part_file, "rb") as in_f:
+                    out_f.write(in_f.read())
+                os.remove(part_file)
+        print(f"Merged {part_file_count} part files into {output_file}, total tokens {total_tokens / 1_000_000:.2f}M")
 
