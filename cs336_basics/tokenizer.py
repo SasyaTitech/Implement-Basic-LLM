@@ -285,28 +285,40 @@ def generate_docs(idx: int, start: int, end: int, file_path: str) -> Iterator[st
 def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPETokenizer) -> int:
     # check np file exists
     output_file = file_path.replace(".txt", f"-bpe-{idx}.npy")
-    if os.path.exists(output_file):
-        print(f"Chunk {idx+1} already processed, skipping")
-        return 0
     now = time.time()
-    token_list: list[np.uint16] = []
     chunk_size = end - start
     token_count: int = 0
-    for doc in generate_docs(idx, start, end, file_path):
-        if len(doc) == 0:
-            continue
-        indices = tokenizer.encode(doc)
-        indices.append(tokenizer.token_to_index[b"<|endoftext|>"])
-        token_count += len(indices)
-        token_list.extend(np.array(indices, dtype=np.uint16))
+    estimated_tokens = int(chunk_size / 3.5)
+    mm = np.memmap(output_file, dtype=np.uint16, mode="w+", shape=(estimated_tokens,))
+    with open(file_path, "r") as f:
+        f.seek(start)
+        while f.tell() < end:
+            line = f.readline()
+            line_tokens = tokenizer.encode(line)
+            for token in line_tokens:
+                mm[token_count] = token
+                token_count += 1
+        read_bytes = f.tell() - start
+        assert read_bytes == chunk_size, f"Chunk {idx+1} read {read_bytes} bytes, expected {chunk_size} bytes"
+    
     time_taken = time.time() - now
     compress_ratio = chunk_size / token_count if token_count > 0 else 0
     bytes_per_sec = chunk_size / time_taken / 1024 / 1024
     print(f"Processed chunk {idx+1}, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s compression ratio {compress_ratio:.2f}")
-    np_data = np.array(token_list, dtype=np.uint16)
-    np.save(output_file, np_data)
-    print(f"Saved {len(np_data) / 1000 / 1000:.2f}M tokens to {output_file}")
-    return np_data.shape[0]
+    mm.flush()
+    print(f"Saved {token_count / 1000 / 1000:.2f}M tokens to {output_file}")
+
+    del mm
+    gc.collect()
+
+    pre_size = os.path.getsize(output_file)
+    # Truncate the file to the real size (2 bytes per token)
+    with open(output_file, "r+b") as f:
+        f.truncate(token_count * 2)
+    after_size = os.path.getsize(output_file)
+    assert after_size == token_count * 2, f"File size after truncation {after_size} bytes, expected {token_count*2} bytes"
+    print(f"File size before truncation: {pre_size:,} bytes, after truncation: {after_size:,} bytes") 
+    return token_count
 
 def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> None:
     from rich.progress import track
@@ -377,6 +389,13 @@ def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
     print(f"Generated {idx / 1000 / 1000:.2f}M tokens, saved to {output_file}")
     mm.flush()
     del mm
+    gc.collect()
+
+    print(f"File size: {os.path.getsize(output_file):,} bytes")
+    # Truncate the file to the real size (2 bytes per token)
+    with open(output_file, "r+b") as f:
+        f.truncate(idx * 2)
+    print(f"File size after truncation: {os.path.getsize(output_file):,} bytes")
     return
 
 
@@ -403,10 +422,10 @@ if is_main_file:
         help="If set, run a test on the given string.",
     )
     parser.add_argument(
-        "--single-process",
+        "--multi_process",
         action="store_true",
-        default=True,
-        help="If set, run in single-process mode.",
+        default=False,
+        help="If set, use multiple processes to tokenize the file.",
     )
 
     arg = parser.parse_args()
@@ -439,7 +458,7 @@ if is_main_file:
             assert doc == decoded, f"Decoded document does not match original. Original: {doc}, Decoded: {decoded}"
         print(f"Total time: {time.time() - now:.2f} seconds compression ratio {total_bytes / token_count:.2f}")
         tokenizer.timer.report()
-    elif arg.single_process:
+    elif not arg.multi_process:
         file_path = arg.test if arg.test else arg.file
         process_file(file_path, tokenizer)
     else:
