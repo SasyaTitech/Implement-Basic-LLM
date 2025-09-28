@@ -438,7 +438,7 @@ def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
             f.seek(start)
             chunk_bytes: bytes = f.read(end - start)
             chunk: str = chunk_bytes.decode("utf-8", errors="replace")
-            estimated_chunk_tokens = int((end - start) / sample_compress_ratio) * 1.15
+            estimated_chunk_tokens = int((end - start) / sample_compress_ratio) * 1.1
             for token_id in track(
                 tokenizer.encode_stream(chunk), total=estimated_chunk_tokens, description=f"Processing chunk {t+1}..."
             ):
