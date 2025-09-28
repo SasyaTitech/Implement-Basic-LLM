@@ -1,12 +1,16 @@
 from dataclasses import dataclass
 import gc
-import hashlib
 import multiprocessing
 import os
 import pickle
 import regex as re
 from typing import Iterable, Iterator, Self
-from cs336_basics.pretokenization import find_chunk_boundaries, pretokenize_pattern_compiled, global_special_tokens, split_pattern_compiled
+from cs336_basics.pretokenization import (
+    find_chunk_boundaries,
+    pretokenize_pattern_compiled,
+    global_special_tokens,
+    split_pattern_compiled,
+)
 from cs336_basics.region_timer import ContextTimer, RegionTimer
 from cs336_basics.token_pair import Pair, PairIndex, PairIndexState
 from rich.live import Live
@@ -65,6 +69,7 @@ def convert_special_token_to_regex(special_tokens: list[str]) -> re.Pattern[str]
     split_pattern = "|".join(list(map(re.escape, special_tokens)))
     split_pattern_compiled = re.compile(split_pattern)
     return split_pattern_compiled
+
 
 class BPETokenizer(Tokenizer):
     """BPE tokenizer given a set of merges and a vocabulary."""
@@ -151,7 +156,7 @@ class BPETokenizer(Tokenizer):
         if not is_main_file:
             return
         self.timer.stop(region_name)
-    
+
     def _convert_pretoken_to_indices(self, str: str) -> list[int]:
         indices: list[int] = []
         pre_tokens: bytes = str.encode("utf-8")
@@ -159,7 +164,7 @@ class BPETokenizer(Tokenizer):
             index: int = self.token_to_index[bytes([b])]
             indices.append(index)
         return indices
-    
+
     def _convert_to_pretokens(self, string: str) -> list[str]:
         with ContextTimer(self.timer, "Get byte token indices", is_main_file):
             if logging_enabled:
@@ -186,10 +191,16 @@ class BPETokenizer(Tokenizer):
         return indices
 
     def encode(self, string: str) -> list[int]:
-        if not self.special_tokens:
-            return self._process_string(string)
-
         indices: list[int] = []
+        for index in self.encode_stream(string):
+            indices.append(index)
+        return indices
+
+    def encode_stream(self, string: str) -> Iterator[int]:
+        if not self.special_tokens:
+            yield from self._process_string(string)
+            return
+
         chunks = self.pattern_compiled.splititer(string)
         for part in chunks:
             assert isinstance(part, str), f"Expected str, got {type(part)}"
@@ -200,12 +211,11 @@ class BPETokenizer(Tokenizer):
                     self.all_pre_tokens.append(part)
                 token: bytes = part.encode("utf-8")
                 index: int = self.token_to_index[token]
-                indices.append(index)
                 self.sp_tokens_count += 1
+                yield index
             else:
                 part_indices = self._process_string(part)
-                indices.extend(part_indices)
-        return indices
+                yield from part_indices
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         for string in iterable:
@@ -224,7 +234,7 @@ class BPETokenizer(Tokenizer):
         with ContextTimer(self.timer, "Merging indices", is_main_file):
             if len(indices) < 2:
                 return indices
-            
+
             pair_state: PairIndexState = PairIndexState(self.merges_index_dict, self.timer, is_main_file)
             pair_state.rebuild(indices)
 
@@ -237,9 +247,7 @@ class BPETokenizer(Tokenizer):
                     return indices
             return indices
 
-    def _merge(
-        self, indices: list[int], pair: PairIndex, new_index: int, pair_state: PairIndexState
-    ) -> list[int]:
+    def _merge(self, indices: list[int], pair: PairIndex, new_index: int, pair_state: PairIndexState) -> list[int]:
         """Return `indices`, but with all instances of `pair` replaced with `new_index`."""
         count: int = pair_state.count(pair)
         if count == 0:
@@ -304,22 +312,17 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
     mm = np.memmap(output_file, dtype=np.uint16, mode="w+", shape=(estimated_tokens,))
     # 1. first solution, read line by line
     if arg.solution == 1:
-        all_lines = []
+        # this solution isn't correct, because we split by lines, which could affect the pretokenization
         with open(file_path, "r") as f:
             f.seek(start)
             while f.tell() < end:
                 line = f.readline()
-                all_lines.append(line)
                 line_tokens = tokenizer.encode(line)
                 for token in line_tokens:
                     mm[token_count] = token
                     token_count += 1
             read_bytes = f.tell() - start
             assert read_bytes == chunk_size, f"Chunk {idx+1} read {read_bytes} bytes, expected {chunk_size} bytes"
-        chunk_str = "".join(all_lines)
-        md5 = hashlib.md5()
-        md5.update(chunk_str.encode("utf-8"))
-        print(f"Chunk {idx+1} md5: {md5.hexdigest()} all_pre_tokens: {tokenizer.all_pre_tokens[-100:]}")
     else:
         # 2. second solution, read the whole chunk
         with open(file_path, "rb") as f:
@@ -331,18 +334,18 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
             for token_id in tokenizer.encode(chunk):
                 mm[token_count] = token_id
                 token_count += 1
-
-            md5 = hashlib.md5()
-            md5.update(chunk_bytes)
-            print(f"Chunk {idx+1} md5: {md5.hexdigest()} all_pre_tokens: {tokenizer.all_pre_tokens[-100:]}")
-
-    with open(f"chunk-{idx+1}-pre-tokens_{arg.solution}.pkl", "wb") as f:
-        pickle.dump(tokenizer.all_pre_tokens, f)
-    print(f"Chunk {idx+1} pre_tokens_count: {tokenizer.pre_tokens_count} special_tokens_count: {tokenizer.sp_tokens_count}")
+    if tokenizer.is_debug:
+        with open(f"chunk-{idx+1}-pre-tokens_{arg.solution}.pkl", "wb") as f:
+            pickle.dump(tokenizer.all_pre_tokens, f)
+    print(
+        f"Chunk {idx+1} pre_tokens_count: {tokenizer.pre_tokens_count} special_tokens_count: {tokenizer.sp_tokens_count}"
+    )
     time_taken = time.time() - now
     compress_ratio = chunk_size / token_count if token_count > 0 else 0
     bytes_per_sec = chunk_size / time_taken / 1024 / 1024
-    print(f"Processed chunk {idx+1}, time_taken={time_taken:.2f} seconds, speed={bytes_per_sec:.2f} MB/s, compression ratio={compress_ratio:.2f}")
+    print(
+        f"Processed chunk {idx+1}, time_taken={time_taken:.2f} seconds, speed={bytes_per_sec:.2f} MB/s, compression ratio={compress_ratio:.2f}"
+    )
     mm.flush()
     print(f"Saved {token_count:,} tokens to {output_file}")
 
@@ -354,14 +357,15 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
     with open(output_file, "r+b") as f:
         f.truncate(token_count * 2)
     after_size = os.path.getsize(output_file)
-    assert after_size == token_count * 2, f"File size after truncation {after_size} bytes, expected {token_count*2} bytes"
-    print(f"chunk {idx + 1} before truncation: {pre_size:,} bytes, after truncation: {after_size:,} bytes") 
+    assert (
+        after_size == token_count * 2
+    ), f"File size after truncation {after_size} bytes, expected {token_count*2} bytes"
+    print(f"chunk {idx + 1} before truncation: {pre_size:,} bytes, after truncation: {after_size:,} bytes")
     return token_count
 
-def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> int:
-    from rich.progress import track
-    now = time.time()
-    total_bytes: int = 0
+
+def split_file_to_chunks(file_path: str, num_chunks: int) -> list[tuple[int, int]]:
+    boundaries: list[int] = []
     with open(file_path, "rb") as f:
         # get file size
         f.seek(0, os.SEEK_END)
@@ -369,19 +373,25 @@ def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> int:
         file_size = total_bytes / 1024 / 1024  # in MB
         f.seek(0)
         print(f"File size: {file_size:.2f} MB")
-        num_processes = max(10, int(file_size // 10) + 1)
-        print(f"Using {num_processes} processes")
-        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+        boundaries = find_chunk_boundaries(f, num_chunks, b"<|endoftext|>")
+    return list(zip(boundaries[:-1], boundaries[1:]))
 
-        # The following is a serial implementation, but you can parallelize this
-        # by sending each start/end pair to a set of processes.
-        print(f"Found {len(boundaries)-1} chunks")
+
+def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> int:
+    from rich.progress import track
+
+    now = time.time()
+    total_bytes: int = os.path.getsize(file_path)
+    desired_num_chunk = max(10, int(total_bytes / 1024 / 1024 // 50) + 1)
+    boundaries = split_file_to_chunks(file_path, desired_num_chunk)
+    print(f"Found {len(boundaries)} chunks, desired {desired_num_chunk} chunks")
+    assert len(boundaries) == desired_num_chunk, f"Expected {desired_num_chunk} chunks, got {len(boundaries)}"
 
     token_count: int = 0
     with multiprocessing.Pool(processes=10) as pool:
         all_token_lists = pool.starmap(
             process_chunk,
-            [(t, file_path, start, end, tokenizer) for t, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:2]))],
+            [(t, file_path, start, end, tokenizer) for t, (start, end) in enumerate(boundaries)],
         )
         for c in all_token_lists:
             token_count += c
@@ -389,37 +399,51 @@ def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> int:
     compress_ratio: float = total_bytes / token_count
     bytes_per_sec = total_bytes / time_taken / 1024 / 1024
     print("-" * 80)
-    print(f"Generate {token_count:,} tokens, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s, compression ratio {compress_ratio:.2f}")
-    return len(boundaries) - 1
+    print(
+        f"Generate {token_count:,} tokens, time_taken {time_taken:.2f} seconds, {bytes_per_sec:.2f} MB/s, compression ratio {compress_ratio:.2f}"
+    )
+    return len(boundaries)
+
 
 def process_file(file_path: str, tokenizer: BPETokenizer) -> None:
     from rich.progress import track
+
     now = time.time()
-    total_bytes: int = 0
-    sample_size = 250_000
+    total_bytes: int = os.path.getsize(file_path)
+    desired_num_chunk = max(10, int(total_bytes / 1024 / 1024 // 50) + 1)
+    boundaries = split_file_to_chunks(file_path, desired_num_chunk)
+    print(f"Found {len(boundaries)} chunks, desired {desired_num_chunk} chunks")
+    assert len(boundaries) == desired_num_chunk, f"Expected {desired_num_chunk} chunks, got {len(boundaries)}"
+
     with open(file_path, "rb") as f:
-        # get file size
-        f.seek(0, os.SEEK_END)
-        total_bytes = f.tell()
-        file_size = total_bytes / 1024 / 1024  # in MB
-        f.seek(0)
-        print(f"File size: {file_size:.2f} MB")
-        sample_bytes = f.read(sample_size)
+        start, end = boundaries[0]
+        f.seek(start)
+        sample_bytes = f.read(end - start)
     sample_str = sample_bytes.decode("utf-8", errors="replace")
     sample_tokens = tokenizer.encode(sample_str)
     sample_compress_ratio = get_compression_ratio(sample_str, sample_tokens)
-    print(f"Sampled {sample_size} bytes, got {len(sample_tokens)} tokens, compression ratio {sample_compress_ratio:.2f}")
+    print(
+        f"Sampled {end - start} bytes, got {len(sample_tokens)} tokens, compression ratio {sample_compress_ratio:.2f}"
+    )
 
     approx_total_tokens = int(total_bytes / sample_compress_ratio)
     print(f"Estimated total tokens: {approx_total_tokens / 1_000_000:.2f}M")
-    print('-' * 80)
+    print("-" * 80)
     output_file = file_path.replace(".txt", f"-bpe.npy")
     mm = np.memmap(output_file, dtype=np.uint16, mode="w+", shape=(int(approx_total_tokens * 1.15),))
     idx = 0
-    with open(file_path, "r") as f:
-        for token_id in track(tokenizer.encode_iterable(f), total=approx_total_tokens, description="Tokenizing"):
-            mm[idx] = token_id
-            idx += 1
+    with open(file_path, "rb") as f:
+        for t, (start, end) in enumerate(boundaries):
+            print(f"Chunk {t + 1}: {start:,} to {end:,}, size {end - start:,} bytes")
+            f.seek(start)
+            chunk_bytes: bytes = f.read(end - start)
+            chunk: str = chunk_bytes.decode("utf-8", errors="replace")
+            estimated_chunk_tokens = int((end - start) / sample_compress_ratio) * 1.15
+            for token_id in track(
+                tokenizer.encode_stream(chunk), total=estimated_chunk_tokens, description=f"Processing chunk {t+1}..."
+            ):
+                mm[idx] = token_id
+                idx += 1
     time_taken = time.time() - now
     bytes_per_sec = total_bytes / time_taken / 1024 / 1024
     compress_ratio = total_bytes / idx
@@ -469,7 +493,7 @@ if is_main_file:
     parser.add_argument(
         "--solution",
         type=int,
-        default=1,
+        default=2,
         choices=[1, 2],
         help="Which solution to use for processing the file. 1 or 2.",
     )
@@ -509,4 +533,3 @@ if is_main_file:
                     out_f.write(in_f.read())
                 os.remove(part_file)
         print(f"Merged {part_file_count} part files into {output_file}, total tokens {total_tokens / 1_000_000:.2f}M")
-
