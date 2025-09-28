@@ -11,6 +11,7 @@ from cs336_basics.region_timer import ContextTimer, RegionTimer
 from cs336_basics.token_pair import Pair, PairIndex, PairIndexState
 from rich.live import Live
 from rich.text import Text
+from rich import print
 import numpy as np
 
 is_main_file: bool = __name__ == "__main__"
@@ -77,6 +78,7 @@ class BPETokenizer(Tokenizer):
     pattern_compiled: re.Pattern[str]
     timer: RegionTimer
     encode_cache: dict[str, tuple[int, ...]] = {}
+    is_debug: bool = False
     pre_tokens_count: int = 0
     sp_tokens_count: int = 0
     all_pre_tokens: list[str] = []
@@ -166,7 +168,8 @@ class BPETokenizer(Tokenizer):
             for mat in pretokenize_pattern_compiled.finditer(string):
                 pretokens.append(mat.group())
         self.pre_tokens_count += len(pretokens)
-        self.all_pre_tokens.extend(pretokens)
+        if self.is_debug:
+            self.all_pre_tokens.extend(pretokens)
         return pretokens
 
     def _process_string(self, string: str) -> list[int]:
@@ -193,7 +196,8 @@ class BPETokenizer(Tokenizer):
             if part in self.special_tokens:
                 if logging_enabled:
                     print(f"Found special token: '{part}'")
-                self.all_pre_tokens.append(part)
+                if self.is_debug:
+                    self.all_pre_tokens.append(part)
                 token: bytes = part.encode("utf-8")
                 index: int = self.token_to_index[token]
                 indices.append(index)
@@ -299,41 +303,41 @@ def process_chunk(idx: int, file_path: str, start: int, end: int, tokenizer: BPE
     estimated_tokens = int(chunk_size / 3.5)
     mm = np.memmap(output_file, dtype=np.uint16, mode="w+", shape=(estimated_tokens,))
     # 1. first solution, read line by line
-    # all_lines = []
-    # with open(file_path, "r") as f:
-    #     f.seek(start)
-    #     while f.tell() < end:
-    #         line = f.readline()
-    #         all_lines.append(line)
-    #         line_tokens = tokenizer.encode(line)
-    #         for token in line_tokens:
-    #             mm[token_count] = token
-    #             token_count += 1
-    #     read_bytes = f.tell() - start
-    #     assert read_bytes == chunk_size, f"Chunk {idx+1} read {read_bytes} bytes, expected {chunk_size} bytes"
-    # chunk_str = "".join(all_lines)
-    # md5 = hashlib.md5()
-    # md5.update(chunk_str.encode("utf-8"))
-    # print(f"Chunk {idx+1} md5: {md5.hexdigest()} all_pre_tokens: {tokenizer.all_pre_tokens[-100:]}")
-    # write all_pre_tokens to a file for debugging
-
-    # 2. second solution, read the whole chunk
-    with open(file_path, "rb") as f:
-        f.seek(start)
-        chunk_bytes: bytes = f.read(chunk_size)
-        chunk: str = chunk_bytes.decode("utf-8")
-        assert f.tell() == end, f"Chunk {idx+1} read {f.tell()-start} bytes, expected {chunk_size} bytes"
-
-        for token_id in tokenizer.encode(chunk):
-            mm[token_count] = token_id
-            token_count += 1
-
+    if arg.solution == 1:
+        all_lines = []
+        with open(file_path, "r") as f:
+            f.seek(start)
+            while f.tell() < end:
+                line = f.readline()
+                all_lines.append(line)
+                line_tokens = tokenizer.encode(line)
+                for token in line_tokens:
+                    mm[token_count] = token
+                    token_count += 1
+            read_bytes = f.tell() - start
+            assert read_bytes == chunk_size, f"Chunk {idx+1} read {read_bytes} bytes, expected {chunk_size} bytes"
+        chunk_str = "".join(all_lines)
         md5 = hashlib.md5()
-        md5.update(chunk_bytes)
+        md5.update(chunk_str.encode("utf-8"))
         print(f"Chunk {idx+1} md5: {md5.hexdigest()} all_pre_tokens: {tokenizer.all_pre_tokens[-100:]}")
+    else:
+        # 2. second solution, read the whole chunk
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            chunk_bytes: bytes = f.read(chunk_size)
+            chunk: str = chunk_bytes.decode("utf-8")
+            assert f.tell() == end, f"Chunk {idx+1} read {f.tell()-start} bytes, expected {chunk_size} bytes"
 
-    with open(f"chunk-{idx+1}-pre-tokens_2.txt", "w") as f:
-        f.write("\n".join(tokenizer.all_pre_tokens))
+            for token_id in tokenizer.encode(chunk):
+                mm[token_count] = token_id
+                token_count += 1
+
+            md5 = hashlib.md5()
+            md5.update(chunk_bytes)
+            print(f"Chunk {idx+1} md5: {md5.hexdigest()} all_pre_tokens: {tokenizer.all_pre_tokens[-100:]}")
+
+    with open(f"chunk-{idx+1}-pre-tokens_{arg.solution}.pkl", "wb") as f:
+        pickle.dump(tokenizer.all_pre_tokens, f)
     print(f"Chunk {idx+1} pre_tokens_count: {tokenizer.pre_tokens_count} special_tokens_count: {tokenizer.sp_tokens_count}")
     time_taken = time.time() - now
     compress_ratio = chunk_size / token_count if token_count > 0 else 0
@@ -365,7 +369,7 @@ def process_file_multi_process(file_path: str, tokenizer: BPETokenizer) -> int:
         file_size = total_bytes / 1024 / 1024  # in MB
         f.seek(0)
         print(f"File size: {file_size:.2f} MB")
-        num_processes = max(10, int(file_size // 0.01) + 1)
+        num_processes = max(10, int(file_size // 10) + 1)
         print(f"Using {num_processes} processes")
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
@@ -457,10 +461,17 @@ if is_main_file:
         help="If set, run a test on the given string.",
     )
     parser.add_argument(
-        "--multi_process",
+        "--multi-process",
         action="store_true",
         default=False,
         help="If set, use multiple processes to tokenize the file.",
+    )
+    parser.add_argument(
+        "--solution",
+        type=int,
+        default=1,
+        choices=[1, 2],
+        help="Which solution to use for processing the file. 1 or 2.",
     )
 
     arg = parser.parse_args()
@@ -475,60 +486,27 @@ if is_main_file:
     merges_file: str = f"{file_prefix}-merges.dat"
     print(f"Loading tokenizer from {vocab_file} and {merges_file}")
     tokenizer = BPETokenizer.from_files(vocab_file, merges_file, special_tokens=["<|endoftext|>"])
+    tokenizer.is_debug = arg.dry_run
 
-    from rich import print
-    print("-" * 80)
-    test_file = "test.txt"
-    all_d = []
-    with open(test_file, "r") as f:
-        for t in tokenizer.encode_iterable(f):
-            pass
-    print(tokenizer.all_pre_tokens)
-    print(f"Total pre_tokens: {len(tokenizer.all_pre_tokens)}")
-    
-    print("-" * 80)
-    tokenizer = BPETokenizer.from_files(vocab_file, merges_file, special_tokens=["<|endoftext|>"])
-    with open(test_file, "rb") as f:
-        all_bytes = f.read()
-    all_str = all_bytes.decode("utf-8")
-    tokenizer.encode(all_str)
-    print(tokenizer.all_pre_tokens)
-    print(f"Total pre_tokens in file: {len(tokenizer.all_pre_tokens)}")
-
-    # if arg.dry_run:
-    #     sum_compress_ratio: float = 0.0
-    #     sample_file: str = f"{file_prefix}-sample.pkl"
-    #     with open(sample_file, "rb") as f:
-    #         all_docs: list[str] = pickle.load(f)
-    #     print(f"Loaded {len(all_docs)} documents from {sample_file}")
-    #     total_bytes: int = 0
-    #     token_count: int = 0
-    #     for doc in all_docs[:10]:
-    #         indices = tokenizer.encode(doc)
-    #         doc_bytes = doc.encode("utf-8")
-    #         total_bytes += len(doc_bytes)
-    #         token_count += len(indices)
-    #         decoded = tokenizer.decode(indices)
-    #         assert doc == decoded, f"Decoded document does not match original. Original: {doc}, Decoded: {decoded}"
-    #     print(f"Total time: {time.time() - now:.2f} seconds compression ratio {total_bytes / token_count:.2f}")
-    #     tokenizer.timer.report()
-    # elif not arg.multi_process:
-    #     file_path = arg.test if arg.test else arg.file
-    #     process_file(file_path, tokenizer)
-    #     tokenizer.timer.report()
-    # else:
-    #     file_path = arg.test if arg.test else arg.file
-    #     part_file_count: int = process_file_multi_process(file_path, tokenizer)
-    #     # merge all part files
-    #     output_file = file_path.replace(".txt", f"-bpe-merged.npy")
-    #     total_tokens = 0
-    #     with open(output_file, "wb") as out_f:
-    #         for i in range(part_file_count):
-    #             part_file = file_path.replace(".txt", f"-bpe-{i}.npy")
-    #             part_size = os.path.getsize(part_file)
-    #             total_tokens += part_size // 2
-    #             with open(part_file, "rb") as in_f:
-    #                 out_f.write(in_f.read())
-    #             os.remove(part_file)
-    #     print(f"Merged {part_file_count} part files into {output_file}, total tokens {total_tokens / 1_000_000:.2f}M")
+    if not arg.multi_process:
+        file_path = arg.test if arg.test else arg.file
+        process_file(file_path, tokenizer)
+        tokenizer.timer.report()
+    else:
+        file_path = arg.test if arg.test else arg.file
+        part_file_count: int = process_file_multi_process(file_path, tokenizer)
+        if arg.dry_run:
+            exit(0)
+        # merge all part files
+        output_file = file_path.replace(".txt", f"-bpe-merged.npy")
+        total_tokens = 0
+        with open(output_file, "wb") as out_f:
+            for i in range(part_file_count):
+                part_file = file_path.replace(".txt", f"-bpe-{i}.npy")
+                part_size = os.path.getsize(part_file)
+                total_tokens += part_size // 2
+                with open(part_file, "rb") as in_f:
+                    out_f.write(in_f.read())
+                os.remove(part_file)
+        print(f"Merged {part_file_count} part files into {output_file}, total tokens {total_tokens / 1_000_000:.2f}M")
 
