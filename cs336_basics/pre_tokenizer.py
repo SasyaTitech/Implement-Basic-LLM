@@ -5,8 +5,8 @@ from collections import Counter
 import cProfile
 import multiprocessing as mp
 
-profiler = cProfile.Profile()
-profiler.enable()
+# profiler = cProfile.Profile()
+# profiler.enable()
 
 def pre_tok_chunk(chunk):
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -37,12 +37,12 @@ def pre_tokenize(file_path : Path, num_processes : int = 24):
 
 
 
-file_path = Path("../data") / "TinyStoriesV2-GPT4-valid.txt"
-word_list = pre_tokenize(file_path)
+# file_path = Path("../data") / "TinyStoriesV2-GPT4-valid.txt"
+# word_list = pre_tokenize(file_path)
 
+# # print(len(word_list))
+# print(word_list.most_common(100))
 # print(len(word_list))
-print(word_list.most_common(100))
-print(word_list['\n\n'])
 
-profiler.disable()
-profiler.dump_stats('./output.prof')
+# profiler.disable()
+# profiler.dump_stats('./output.prof')
